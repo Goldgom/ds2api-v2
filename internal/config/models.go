@@ -100,7 +100,7 @@ func GetModelType(model string) (modelType string, ok bool) {
 	baseModel, _ := splitNoThinkingModel(model)
 	switch baseModel {
 	case "deepseek-v4-flash", "deepseek-v4-flash-search":
-		return "default", true
+		return "deepseek-flash", true
 	case "deepseek-v4-pro":
 		return "expert", true
 	case "deepseek-v4-vision":

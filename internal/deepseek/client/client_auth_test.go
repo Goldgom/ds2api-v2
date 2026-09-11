@@ -22,7 +22,7 @@ func TestExtractCreateSessionIDSupportsNestedChatSessionShape(t *testing.T) {
 			"biz_data": map[string]any{
 				"chat_session": map[string]any{
 					"id":         "nested-session-id",
-					"model_type": "default",
+					"model_type": "deepseek-flash",
 				},
 			},
 		},

@@ -340,7 +340,7 @@ func doCompletion(ctx context.Context, token, sessionID, powHeader string) stepR
 	payload := map[string]any{
 		"chat_session_id":   sessionID,
 		"parent_message_id": nil,
-		"model_type":        "default",
+		"model_type":        "deepseek-flash",
 		"prompt":            "<User>: 你好",
 		"ref_file_ids":      []any{},
 		"thinking_enabled":  false,

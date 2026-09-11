@@ -78,12 +78,12 @@ func TestGetModelConfigDeepSeekVisionSearchUnsupported(t *testing.T) {
 
 func TestGetModelTypeDefaultExpertAndVision(t *testing.T) {
 	defaultType, ok := GetModelType("deepseek-v4-flash")
-	if !ok || defaultType != "default" {
-		t.Fatalf("expected default model_type, got ok=%v model_type=%q", ok, defaultType)
+	if !ok || defaultType != "deepseek-flash" {
+		t.Fatalf("expected deepseek-flash model_type, got ok=%v model_type=%q", ok, defaultType)
 	}
 	defaultNoThinkingType, ok := GetModelType("deepseek-v4-flash-nothinking")
-	if !ok || defaultNoThinkingType != "default" {
-		t.Fatalf("expected default model_type for nothinking, got ok=%v model_type=%q", ok, defaultNoThinkingType)
+	if !ok || defaultNoThinkingType != "deepseek-flash" {
+		t.Fatalf("expected deepseek-flash model_type for nothinking, got ok=%v model_type=%q", ok, defaultNoThinkingType)
 	}
 	expertType, ok := GetModelType("deepseek-v4-pro")
 	if !ok || expertType != "expert" {

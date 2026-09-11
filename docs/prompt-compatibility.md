@@ -88,7 +88,7 @@ DS2API 当前的核心思路，不是把客户端传来的 `messages`、`tools`�
 ```json
 {
   "chat_session_id": "session-id",
-  "model_type": "default",
+  "model_type": "deepseek-flash",
   "parent_message_id": null,
   "prompt": "<System>:...",
   "ref_file_ids": [
@@ -107,6 +107,7 @@ DS2API 当前的核心思路，不是把客户端传来的 `messages`、`tools`�
 
 - `prompt` 才是对话上下文主载体。
 - `ref_file_ids` 只承载文件引用，不承载普通文本消息。
+- 官网 2026-09 的 Flash 请求已把旧的 `model_type: "default"` 改为 `model_type: "deepseek-flash"`；DS2API 的 Flash、Flash Search 及其 `-nothinking` 变体统一优先按新值下发。灰度期间仍有节点在 422 schema 错误中只接受旧 `default` 值，因此 Go 主路径与 Vercel Node 流式路径仅在明确匹配该枚举反序列化错误时，用同一 PoW 安全回退一次 `default`；其他 422 或传输失败不会重试。尚未抓包确认的 expert / vision 值保持不变。
 - `tools` 不会作为“原生工具 schema”直接下发给下游，而是被改写进 `prompt`。
 - 对外返回给客户端的 `prompt_tokens` / `input_tokens` / `promptTokenCount` 不再按“最后一条消息”或字符粗估近似返回，而是基于**完整上下文 prompt**做 tokenizer 计数；为了避免上下文实际超限但客户端误以为还能塞下，请求侧上下文 token 会额外保守上浮一点，宁可略大也不低估。
 - 当前 `/v1/chat/completions` 业务路径仍是“每次请求新建一个远端 `chat_session_id`，并默认发送 `parent_message_id: null`”；因此 DS2API 对外默认表现为“新会话 + prompt 拼历史”，而不是复用 DeepSeek 原生会话树。
@@ -299,7 +300,7 @@ OpenAI 文件相关实现：
 - 文件 ID 收集：
   [internal/promptcompat/file_refs.go](../internal/promptcompat/file_refs.go)
 
-OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而是会先根据请求里的 `model` 解析出 DeepSeek 的上传类型，并把它透传到上传接口的 `x-model-type`。当前可见的上传类型就是 `default` / `expert` / `vision`，其中 vision 请求上传图片时必须带上 `vision`，否则下游容易退回到仅文本或 OCR 语义。expert（pro）模型不支持文件上传，runtime 会在内联文件预处理和 current input file 阶段直接跳过，completion payload 的 `ref_file_ids` 也会被清空。这个模型类型会同时用于：
+OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而是会先根据请求里的 `model` 解析出 DeepSeek 的上传类型，并把它透传到上传接口的 `x-model-type`。当前可见的上传类型是 `deepseek-flash` / `expert` / `vision`；独立文件上传入口仍兼容客户端显式传入旧值 `default`。其中 vision 请求上传图片时必须带上 `vision`，否则下游容易退回到仅文本或 OCR 语义。expert（pro）模型不支持文件上传，runtime 会在内联文件预处理和 current input file 阶段直接跳过，completion payload 的 `ref_file_ids` 也会被清空。这个模型类型会同时用于：
 
 - `/v1/files` 这类独立文件上传入口
 - Chat / Responses 的 inline 图片、附件上传

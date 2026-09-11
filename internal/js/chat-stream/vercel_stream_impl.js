@@ -133,7 +133,18 @@ async function handleVercelStream(req, res, rawBody, payload) {
         throw err;
       }
     };
-    const fetchCompletion = (bodyPayload) => fetchDeepSeekStream(DEEPSEEK_COMPLETION_URL, bodyPayload, currentPowHeader);
+    const fetchCompletion = async (bodyPayload, powHeader = currentPowHeader) => {
+      let response = await fetchDeepSeekStream(DEEPSEEK_COMPLETION_URL, bodyPayload, powHeader);
+      if (await completionRejectsNewFlashModelType(response, bodyPayload)) {
+        console.info('[deepseek_completion] retrying legacy flash model_type');
+        response = await fetchDeepSeekStream(
+          DEEPSEEK_COMPLETION_URL,
+          { ...bodyPayload, model_type: 'default' },
+          powHeader,
+        );
+      }
+      return response;
+    };
     let activeDeepSeekSessionID = responseID;
     const fetchContinue = async (messageID) => {
       const powHeader = await refreshPowHeader('continue');
@@ -491,8 +502,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
       if (!retryPowHeader) {
         return;
       }
-      completionRes = await fetchDeepSeekStream(
-        DEEPSEEK_COMPLETION_URL,
+      completionRes = await fetchCompletion(
         clonePayloadForEmptyOutputRetry(completionPayload, processed.responseMessageID),
         retryPowHeader,
       );
@@ -532,6 +542,22 @@ function appendEmptyOutputRetrySuffix(prompt) {
     return EMPTY_OUTPUT_RETRY_SUFFIX;
   }
   return `${base}\n\n${EMPTY_OUTPUT_RETRY_SUFFIX}`;
+}
+
+async function completionRejectsNewFlashModelType(response, payload) {
+  if (!response || response.status !== 422 || asString(payload && payload.model_type).toLowerCase() !== 'deepseek-flash') {
+    return false;
+  }
+  let detail = '';
+  try {
+    detail = await response.clone().text();
+  } catch (_err) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return normalized.includes('model_type')
+    && normalized.includes('unknown variant')
+    && normalized.includes('deepseek-flash');
 }
 
 function usagePromptWithEmptyOutputRetry(originalPrompt, attempts) {

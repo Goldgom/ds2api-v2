@@ -211,8 +211,8 @@ func TestResponsesUploadsInlineFilesBeforeCompletion(t *testing.T) {
 	if len(ds.uploadCalls) != 1 {
 		t.Fatalf("expected 1 upload call, got %d", len(ds.uploadCalls))
 	}
-	if ds.uploadCalls[0].ModelType != "default" {
-		t.Fatalf("expected default model type for flash request, got %q", ds.uploadCalls[0].ModelType)
+	if ds.uploadCalls[0].ModelType != "deepseek-flash" {
+		t.Fatalf("expected deepseek-flash model type for flash request, got %q", ds.uploadCalls[0].ModelType)
 	}
 	refIDs, _ := ds.completionReq["ref_file_ids"].([]any)
 	if len(refIDs) != 1 || refIDs[0] != "file-inline-1" {

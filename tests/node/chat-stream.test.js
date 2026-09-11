@@ -165,7 +165,8 @@ async function runMockVercelStreamSequence(upstreamSequences, prepareOverrides =
     }
     const idx = Math.min(completionCalls, upstreamSequences.length - 1);
     completionCalls += 1;
-    return sseResponse(upstreamSequences[idx]);
+    const response = upstreamSequences[idx];
+    return response instanceof Response ? response : sseResponse(response);
   };
   try {
     const req = new MockStreamRequest();
@@ -181,6 +182,25 @@ async function runMockVercelStreamSequence(upstreamSequences, prepareOverrides =
 test('chat-stream exposes parser test hooks', () => {
   assert.equal(typeof parseChunkForContent, 'function');
   assert.equal(typeof resolveToolcallPolicy, 'function');
+});
+
+test('vercel stream falls back to legacy flash model type on schema rejection', async () => {
+  const rejection = new Response(
+    'Failed to deserialize model_type: unknown variant `deepseek-flash`, expected `default`',
+    { status: 422, headers: { 'content-type': 'text/plain' } },
+  );
+  const { frames, fetchURLs, fetchBodies } = await runMockVercelStreamSequence([
+    rejection,
+    ['data: {"p":"response/content","v":"visible"}\n\n', 'data: [DONE]\n\n'],
+  ], {
+    payload: { prompt: 'hello', model_type: 'deepseek-flash' },
+  });
+  const completionBodies = fetchBodies.filter((body) => Object.hasOwn(body, 'prompt'));
+  assert.equal(fetchURLs.filter((url) => url === 'https://chat.deepseek.com/api/v0/chat/completion').length, 2);
+  assert.equal(completionBodies[0].model_type, 'deepseek-flash');
+  assert.equal(completionBodies[1].model_type, 'default');
+  assert.equal(JSON.parse(frames[0]).choices[0].delta.content, 'visible');
+  assert.equal(frames.at(-1), '[DONE]');
 });
 
 test('vercel stream emits Go-parity empty-output failure on DONE', async () => {

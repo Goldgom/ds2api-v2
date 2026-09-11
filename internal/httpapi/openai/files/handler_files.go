@@ -145,12 +145,12 @@ func resolveUploadModelType(store shared.ConfigReader, r *http.Request) string {
 			}
 		}
 	}
-	return "default"
+	return "deepseek-flash"
 }
 
 func normalizeUploadModelType(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "default", "expert", "vision":
+	case "deepseek-flash", "default", "expert", "vision":
 		return strings.ToLower(strings.TrimSpace(raw))
 	default:
 		return ""
