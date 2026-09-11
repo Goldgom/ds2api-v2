@@ -88,7 +88,7 @@ DS2API 当前的核心思路，不是把客户端传来的 `messages`、`tools`�
 ```json
 {
   "chat_session_id": "session-id",
-  "model_type": "deepseek-flash",
+  "model_type": "default",
   "parent_message_id": null,
   "prompt": "<System>:...",
   "ref_file_ids": [
@@ -107,7 +107,7 @@ DS2API 当前的核心思路，不是把客户端传来的 `messages`、`tools`�
 
 - `prompt` 才是对话上下文主载体。
 - `ref_file_ids` 只承载文件引用，不承载普通文本消息。
-- 官网 2026-09 的 Flash 请求已把旧的 `model_type: "default"` 改为 `model_type: "deepseek-flash"`；DS2API 的 Flash、Flash Search 及其 `-nothinking` 变体统一优先按新值下发。灰度期间仍有节点在 422 schema 错误中只接受旧 `default` 值，因此 Go 主路径与 Vercel Node 流式路径仅在明确匹配该枚举反序列化错误时，用同一 PoW 安全回退一次 `default`；其他 422 或传输失败不会重试。尚未抓包确认的 expert / vision 值保持不变。
+- 官网 2026-09 的 Flash 请求已出现 `model_type: "deepseek-flash"`，thinking 与 search 则继续作为独立布尔开关。DS2API 因此只公开 Flash、Flash Search 及其 `-nothinking` 开关组合，移除已不在新版网页中的 Pro / Vision 原生模型；协议兼容 alias 全部归一到这组 Flash 模型。当前实际命中的上游节点仍会以 422 schema 错误拒绝 `deepseek-flash`，所以请求继续单次发送 `default`。completion 属于非幂等请求，遇到 422 或传输失败时不会自动改写模型类型重放。
 - `tools` 不会作为“原生工具 schema”直接下发给下游，而是被改写进 `prompt`。
 - 对外返回给客户端的 `prompt_tokens` / `input_tokens` / `promptTokenCount` 不再按“最后一条消息”或字符粗估近似返回，而是基于**完整上下文 prompt**做 tokenizer 计数；为了避免上下文实际超限但客户端误以为还能塞下，请求侧上下文 token 会额外保守上浮一点，宁可略大也不低估。
 - 当前 `/v1/chat/completions` 业务路径仍是“每次请求新建一个远端 `chat_session_id`，并默认发送 `parent_message_id: null`”；因此 DS2API 对外默认表现为“新会话 + prompt 拼历史”，而不是复用 DeepSeek 原生会话树。
@@ -300,7 +300,7 @@ OpenAI 文件相关实现：
 - 文件 ID 收集：
   [internal/promptcompat/file_refs.go](../internal/promptcompat/file_refs.go)
 
-OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而是会先根据请求里的 `model` 解析出 DeepSeek 的上传类型，并把它透传到上传接口的 `x-model-type`。当前可见的上传类型是 `deepseek-flash` / `expert` / `vision`；独立文件上传入口仍兼容客户端显式传入旧值 `default`。其中 vision 请求上传图片时必须带上 `vision`，否则下游容易退回到仅文本或 OCR 语义。expert（pro）模型不支持文件上传，runtime 会在内联文件预处理和 current input file 阶段直接跳过，completion payload 的 `ref_file_ids` 也会被清空。这个模型类型会同时用于：
+OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而是会先根据请求里的 `model` 解析出 DeepSeek 的上传类型，并把它透传到上传接口的 `x-model-type`。新版公开模型全部归一到 Flash，因此上传路径统一使用已验证的 `default`；不再从公开模型解析出 `expert` 或 `vision`。这个模型类型会同时用于：
 
 - `/v1/files` 这类独立文件上传入口
 - Chat / Responses 的 inline 图片、附件上传
@@ -321,7 +321,6 @@ OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而�
 
 - `current_input_file` 默认关闭；它在统一 completion runtime 入口全局生效，用于把“完整上下文”合并进 `DS2API_HISTORY.txt` 上下文文件。当最新 user turn 的纯文本长度达到 `current_input_file.min_chars`（默认 `0`）时，runtime 会上传一个文件名为 `DS2API_HISTORY.txt` 的上下文文件。文件内容会先经过各协议入口的标准化，再序列化成按轮次编号的 `DS2API_HISTORY.txt` 风格 transcript，带有 `# DS2API_HISTORY.txt` 标题和 `=== N. ROLE ===` 分段；如果当前请求声明了可用工具，还会把工具名称、描述和参数 schema 单独上传成 `DS2API_TOOLS.txt`，带有 `# DS2API_TOOLS.txt` 标题。live prompt 中则会给出一个 continuation 语气的 user 消息，引导模型从 `DS2API_HISTORY.txt` 的最新状态继续推进，并在有工具文件时明确可用工具 schema 位于 `DS2API_TOOLS.txt`；system prompt 也会在统一 EPSE 工具格式约束前说明 `DS2API_TOOLS.txt` 是可调用工具和 schema 的权威来源，同时保留本轮工具选择策略，避免把任务拉回起点。
 - 如果 `current_input_file.enabled=false`，请求会直接透传，不上传任何拆分上下文文件。
-- expert（pro）模型不支持文件上传。即使 `current_input_file` 已开启且达到阈值，runtime 也不会为 expert 模型上传 `DS2API_HISTORY.txt` / `DS2API_TOOLS.txt`；同时客户端传入的所有 `ref_file_ids` 和内联文件附件也会在 completion payload 中被丢弃（不会发送给上游）。
 - 即使触发 `current_input_file` 后 live prompt 被缩短，对客户端回包里的上下文 token 统计，仍会沿用**拆分前的完整 prompt 语义**做计数，而不是按缩短后的占位 prompt 计算；否则会把真实上下文显著算小。
 
 相关实现：
@@ -367,9 +366,9 @@ Description: ...
 Parameters: ...
 ```
 
-开启后，请求的 live prompt 不再直接内联完整上下文，也不再内联大段工具 schema；它保留一个 user role 的短提示，提示模型基于已提供上下文直接回答最新请求，并在有工具时引用 `DS2API_TOOLS.txt`。上传后的 `DS2API_HISTORY.txt` file_id 会排在 `ref_file_ids` 最前；如果存在 `DS2API_TOOLS.txt`，它的 file_id 紧随其后；客户端已有的其他 file_id 保持在后面。上下文 token 统计会包含上传的历史文件、工具文件和 live prompt。自动生成的 current-input 文件引用会被记录为 runtime 状态；如果托管账号模式切号 fresh retry，runtime 会重新上传这些自动文件，而不是把上一账号的 file_id 交给新账号。对于 expert（pro）模型，`ref_file_ids` 会在 completion payload 中被清空，且不会上传任何 current-input 文件。
+开启后，请求的 live prompt 不再直接内联完整上下文，也不再内联大段工具 schema；它保留一个 user role 的短提示，提示模型基于已提供上下文直接回答最新请求，并在有工具时引用 `DS2API_TOOLS.txt`。上传后的 `DS2API_HISTORY.txt` file_id 会排在 `ref_file_ids` 最前；如果存在 `DS2API_TOOLS.txt`，它的 file_id 紧随其后；客户端已有的其他 file_id 保持在后面。上下文 token 统计会包含上传的历史文件、工具文件和 live prompt。自动生成的 current-input 文件引用会被记录为 runtime 状态；如果托管账号模式切号 fresh retry，runtime 会重新上传这些自动文件，而不是把上一账号的 file_id 交给新账号。当前所有公开模型都走 Flash 文件路径。
 
-### 9.1 expert 模式提示词分段（expert_prompt_segment）
+### 9.1 旧 expert 模式提示词分段（当前无公开模型触发）
 
 因为 expert（pro）模型不支持文件上传，`current_input_file` 拆分方式无法为 expert 模型缩短 live prompt。当 expert 模型的 `FinalPrompt` 超过字符数阈值时，兼容层会按 rune 字数把提示词切分为多段，不再按 `<User>` / `<Assistant>` 等 role 标记边界切分；这些标记在 DeepSeek Web Chat 中只是普通文本。前 N-1 段使用 `FireCompletionAndStop`（发送后捕获 `response_message_id` 再调用 `stop_stream` 终止生成），最后一段正常返回完整响应。该机制复用 `StartCompletionWithSegments` 编排，对等 `StartCompletion` 可无缝接入现有流式与非流式 `Execute*` 流程。
 

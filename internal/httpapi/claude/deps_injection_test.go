@@ -90,7 +90,7 @@ func TestNormalizeClaudeRequestNoThinkingAliasForcesThinkingOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeClaudeRequest error: %v", err)
 	}
-	if out.Standard.ResolvedModel != "deepseek-v4-pro-nothinking" {
+	if out.Standard.ResolvedModel != "deepseek-v4-flash-nothinking" {
 		t.Fatalf("resolved model mismatch: got=%q", out.Standard.ResolvedModel)
 	}
 	if out.Standard.Thinking {

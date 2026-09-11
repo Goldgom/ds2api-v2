@@ -52,11 +52,9 @@ func (r *Runner) caseModelsOpenAI(ctx context.Context, cc *caseContext) error {
 	cc.assert("status_200", resp.StatusCode == http.StatusOK, fmt.Sprintf("status=%d", resp.StatusCode))
 	ids := extractModelIDs(resp.Body)
 	cc.assert("has_deepseek_chat", contains(ids, "deepseek-v4-flash"), strings.Join(ids, ","))
-	cc.assert("has_deepseek_reasoner", contains(ids, "deepseek-v4-pro"), strings.Join(ids, ","))
-	cc.assert("has_deepseek_expert_chat", contains(ids, "deepseek-v4-pro"), strings.Join(ids, ","))
-	cc.assert("has_deepseek_expert_reasoner", contains(ids, "deepseek-v4-pro"), strings.Join(ids, ","))
-	cc.assert("has_deepseek_vision_chat", contains(ids, "deepseek-v4-vision"), strings.Join(ids, ","))
-	cc.assert("has_deepseek_vision_reasoner", contains(ids, "deepseek-v4-vision"), strings.Join(ids, ","))
+	cc.assert("has_deepseek_flash_search", contains(ids, "deepseek-v4-flash-search"), strings.Join(ids, ","))
+	cc.assert("removed_deepseek_pro", !contains(ids, "deepseek-v4-pro"), strings.Join(ids, ","))
+	cc.assert("removed_deepseek_vision", !contains(ids, "deepseek-v4-vision"), strings.Join(ids, ","))
 	return nil
 }
 

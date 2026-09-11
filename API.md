@@ -210,12 +210,8 @@ OpenAI `/v1/*` 仍是规范路径。对于只配置 DS2API 根地址的客户端
   "data": [
     {"id": "deepseek-v4-flash", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
     {"id": "deepseek-v4-flash-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-pro", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-pro-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
     {"id": "deepseek-v4-flash-search", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-flash-search-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-vision", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-vision-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []}
+    {"id": "deepseek-v4-flash-search-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []}
   ]
 }
 ```
@@ -240,7 +236,7 @@ OpenAI `/v1/*` 仍是规范路径。对于只配置 DS2API 根地址的客户端
 - 其他内置精确 alias：`llama-3.1-70b-instruct`、`qwen-max`
 
 上述 alias 若在请求名后追加 `-nothinking` 后缀，也会映射到对应的强制关闭 thinking 版本。
-当前视觉能力仅对应 `deepseek-v4-vision` / `deepseek-v4-vision-nothinking`，不会解析出独立的 `vision-search` 变体。
+新版网页只保留 Flash 模型；thinking 与 search 是独立开关。内置 OpenAI / Claude / Gemini alias 会统一归一到 Flash 或 Flash Search，已移除的 Pro / Vision 原生 ID 会返回 `invalid_request_error`。
 
 退役历史模型（如 `claude-1.*`、`claude-2.*`、`claude-instant-*`、`gpt-3.5*`）会被显式拒绝。
 
@@ -272,7 +268,7 @@ Content-Type: application/json
   "id": "<chat_session_id>",
   "object": "chat.completion",
   "created": 1738400000,
-  "model": "deepseek-v4-pro",
+  "model": "deepseek-v4-flash",
   "choices": [
     {
       "index": 0,
@@ -734,7 +730,7 @@ data: {"type":"message_stop"}
   ],
   "model_aliases": {
     "claude-sonnet-4-6": "deepseek-v4-flash",
-    "claude-opus-4-6": "deepseek-v4-pro"
+    "claude-opus-4-6": "deepseek-v4-flash"
   }
 }
 ```
@@ -758,7 +754,7 @@ data: {"type":"message_stop"}
   ],
   "model_aliases": {
     "claude-sonnet-4-6": "deepseek-v4-flash",
-    "claude-opus-4-6": "deepseek-v4-pro"
+    "claude-opus-4-6": "deepseek-v4-flash"
   }
 }
 ```
@@ -1298,7 +1294,7 @@ curl http://localhost:5001/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-v4-flash",
     "messages": [{"role": "user", "content": "解释一下量子纠缠"}],
     "stream": true
   }'

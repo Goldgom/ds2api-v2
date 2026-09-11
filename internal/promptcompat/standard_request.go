@@ -69,7 +69,7 @@ func (r StandardRequest) CompletionPayloadWithParentAndPrompt(sessionID string, 
 	if modelID == "" {
 		modelID = r.RequestedModel
 	}
-	modelType := "deepseek-flash"
+	modelType := "default"
 	if resolvedType, ok := config.GetModelType(modelID); ok {
 		modelType = resolvedType
 	}

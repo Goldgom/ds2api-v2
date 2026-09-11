@@ -55,15 +55,15 @@ func TestResolveExpandedHistoricalAliases(t *testing.T) {
 		want  string
 	}{
 		{name: "openai old chatgpt", model: "chatgpt-4o", want: "deepseek-v4-flash"},
-		{name: "openai codex max", model: "gpt-5.1-codex-max", want: "deepseek-v4-pro"},
+		{name: "openai codex max", model: "gpt-5.1-codex-max", want: "deepseek-v4-flash"},
 		{name: "openai deep research", model: "o3-deep-research", want: "deepseek-v4-flash-search"},
-		{name: "openai historical reasoning", model: "o1-preview", want: "deepseek-v4-pro"},
+		{name: "openai historical reasoning", model: "o1-preview", want: "deepseek-v4-flash"},
 		{name: "claude latest historical", model: "claude-3-5-sonnet-latest", want: "deepseek-v4-flash"},
-		{name: "claude historical opus", model: "claude-3-opus-20240229", want: "deepseek-v4-pro"},
+		{name: "claude historical opus", model: "claude-3-opus-20240229", want: "deepseek-v4-flash"},
 		{name: "claude historical haiku", model: "claude-3-haiku-20240307", want: "deepseek-v4-flash"},
 		{name: "gemini latest alias", model: "gemini-flash-latest", want: "deepseek-v4-flash"},
-		{name: "gemini historical pro", model: "gemini-1.5-pro", want: "deepseek-v4-pro"},
-		{name: "gemini vision legacy", model: "gemini-pro-vision", want: "deepseek-v4-vision"},
+		{name: "gemini historical pro", model: "gemini-1.5-pro", want: "deepseek-v4-flash"},
+		{name: "gemini vision legacy", model: "gemini-pro-vision", want: "deepseek-v4-flash"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,28 +119,20 @@ func TestResolveModelRejectsRetiredHistoricalModels(t *testing.T) {
 	}
 }
 
-func TestResolveModelDirectDeepSeekExpert(t *testing.T) {
-	got, ok := ResolveModel(nil, "deepseek-v4-pro")
-	if !ok || got != "deepseek-v4-pro" {
-		t.Fatalf("expected deepseek-v4-pro, got ok=%v model=%q", ok, got)
+func TestResolveModelRejectsRemovedDeepSeekModels(t *testing.T) {
+	for _, model := range []string{"deepseek-v4-pro", "deepseek-v4-vision"} {
+		if got, ok := ResolveModel(nil, model); ok {
+			t.Fatalf("expected removed model %q to be rejected, got %q", model, got)
+		}
 	}
 }
 
-func TestResolveModelCustomAliasToExpert(t *testing.T) {
+func TestResolveModelRejectsCustomAliasToRemovedModel(t *testing.T) {
 	got, ok := ResolveModel(mockModelAliasReader{
-		"my-expert-model": "deepseek-v4-flash-search",
-	}, "my-expert-model")
-	if !ok || got != "deepseek-v4-flash-search" {
-		t.Fatalf("expected alias -> deepseek-v4-flash-search, got ok=%v model=%q", ok, got)
-	}
-}
-
-func TestResolveModelCustomAliasToVision(t *testing.T) {
-	got, ok := ResolveModel(mockModelAliasReader{
-		"my-vision-model": "deepseek-v4-vision",
-	}, "my-vision-model")
-	if !ok || got != "deepseek-v4-vision" {
-		t.Fatalf("expected alias -> deepseek-v4-vision, got ok=%v model=%q", ok, got)
+		"my-removed-model": "deepseek-v4-vision",
+	}, "my-removed-model")
+	if ok {
+		t.Fatalf("expected alias to removed model to be rejected, got %q", got)
 	}
 }
 

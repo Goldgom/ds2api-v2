@@ -8,8 +8,6 @@
 
 ### 在保留核心功能的基础上做出了若干修改，主要解决deepseek封号问题。效果显著(?) 实测目前个人使用几乎已无禁言封号风险
 
-
-
 <a href="https://trendshift.io/repositories/24508" target="_blank"><img src="https://trendshift.io/api/badge/repositories/24508" alt="CJackHwang%2Fds2api | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 [![License](https://img.shields.io/github/license/CJackHwang/ds2api.svg)](LICENSE)
@@ -27,11 +25,11 @@
 【感谢Linux.do社区及GitHub社区各位开发者对项目的支持与贡献】
 
 > **重要免责声明**
-> 
+>
 > 本仓库仅供学习、研究、个人实验和内部验证使用，不提供任何形式的商业授权、适用性保证或结果保证。
-> 
+>
 > 作者及仓库维护者不对因使用、修改、分发、部署或依赖本项目而产生的任何直接或间接损失、账号封禁、数据丢失、法律风险或第三方索赔负责。
-> 
+>
 > 请勿将本项目用于违反服务条款、协议、法律法规或平台规则的场景。商业使用前请自行确认 `LICENSE`、相关协议以及你是否获得了作者的书面许可。
 
 ## 目录
@@ -122,62 +120,57 @@ flowchart LR
 
 ## 核心能力
 
-| 能力 | 说明 |
-| --- | --- |
-| OpenAI 兼容 | `GET /v1/models`、`GET /v1/models/{id}`、`POST /v1/chat/completions`、`POST /v1/responses`、`GET /v1/responses/{response_id}`、`POST /v1/embeddings`、`POST /v1/files`、`GET /v1/files/{file_id}` |
-| Claude 兼容 | `GET /anthropic/v1/models`、`POST /anthropic/v1/messages`、`POST /anthropic/v1/messages/count_tokens`（及快捷路径 `/v1/messages`、`/messages`） |
-| Gemini 兼容 | `POST /v1beta/models/{model}:generateContent`、`POST /v1beta/models/{model}:streamGenerateContent`（及 `/v1/models/{model}:*` 路径） |
-| Ollama 兼容 | `GET /api/version`、`GET /api/tags`、`POST /api/show` |
-| 统一 CORS 兼容 | `/v1/*`、`/anthropic/*`、`/v1beta/models/*`、`/api/*`、`/admin/*` 统一走同一套 CORS 策略；Vercel 上 `/v1/chat/completions` 的 Node Runtime 也对齐相同放行规则，尽量减少第三方预检请求头限制 |
-| 多账号轮询 | 自动 token 刷新、邮箱/手机号双登录方式 |
-| 并发队列控制 | 每账号 in-flight 上限 + 等待队列，动态计算建议并发值 |
-| DeepSeek PoW | 纯 Go 高性能实现（DeepSeekHashV1），毫秒级响应 |
-| Tool Calling | 防泄漏处理：非代码块高置信特征识别、`delta.tool_calls` 早发、结构化增量输出 |
-| Admin API | 配置管理、运行时设置热更新、代理管理、账号测试 / 批量测试、会话清理、导入导出、Vercel 同步、版本检查 |
-| WebUI 管理台 | `/admin` 单页应用（中英文双语、深色模式，支持查看服务器端对话记录） |
-| 运维探针 | `GET /healthz`（存活）、`GET /readyz`（就绪） |
+| 能力           | 说明                                                                                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAI 兼容    | `GET /v1/models`、`GET /v1/models/{id}`、`POST /v1/chat/completions`、`POST /v1/responses`、`GET /v1/responses/{response_id}`、`POST /v1/embeddings`、`POST /v1/files`、`GET /v1/files/{file_id}` |
+| Claude 兼容    | `GET /anthropic/v1/models`、`POST /anthropic/v1/messages`、`POST /anthropic/v1/messages/count_tokens`（及快捷路径 `/v1/messages`、`/messages`）                                                         |
+| Gemini 兼容    | `POST /v1beta/models/{model}:generateContent`、`POST /v1beta/models/{model}:streamGenerateContent`（及 `/v1/models/{model}:*` 路径）                                                                        |
+| Ollama 兼容    | `GET /api/version`、`GET /api/tags`、`POST /api/show`                                                                                                                                                       |
+| 统一 CORS 兼容 | `/v1/*`、`/anthropic/*`、`/v1beta/models/*`、`/api/*`、`/admin/*` 统一走同一套 CORS 策略；Vercel 上 `/v1/chat/completions` 的 Node Runtime 也对齐相同放行规则，尽量减少第三方预检请求头限制           |
+| 多账号轮询     | 自动 token 刷新、邮箱/手机号双登录方式                                                                                                                                                                            |
+| 并发队列控制   | 每账号 in-flight 上限 + 等待队列，动态计算建议并发值                                                                                                                                                              |
+| DeepSeek PoW   | 纯 Go 高性能实现（DeepSeekHashV1），毫秒级响应                                                                                                                                                                    |
+| Tool Calling   | 防泄漏处理：非代码块高置信特征识别、`delta.tool_calls` 早发、结构化增量输出                                                                                                                                     |
+| Admin API      | 配置管理、运行时设置热更新、代理管理、账号测试 / 批量测试、会话清理、导入导出、Vercel 同步、版本检查                                                                                                              |
+| WebUI 管理台   | `/admin` 单页应用（中英文双语、深色模式，支持查看服务器端对话记录）                                                                                                                                             |
+| 运维探针       | `GET /healthz`（存活）、`GET /readyz`（就绪）                                                                                                                                                                 |
 
 OpenAI `/v1/*` 仍是推荐的规范路径；同时支持 `/models`、`/chat/completions`、`/responses`、`/embeddings`、`/files`、`/files/{file_id}` 等根路径快捷路由，方便只配置 DS2API 根地址的第三方客户端。
 
 ## 平台兼容矩阵
 
-| 级别 | 平台 | 当前状态 |
-| --- | --- | --- |
-| P0 | Codex CLI/SDK（`wire_api=chat` / `wire_api=responses`） | ✅ |
-| P0 | OpenAI SDK（JS/Python，chat + responses） | ✅ |
-| P0 | Vercel AI SDK（openai-compatible） | ✅ |
-| P0 | Anthropic SDK（messages） | ✅ |
-| P0 | Google Gemini SDK（generateContent） | ✅ |
-| P1 | LangChain / LlamaIndex / OpenWebUI（OpenAI 兼容接入） | ✅ |
+| 级别 | 平台                                                        | 当前状态 |
+| ---- | ----------------------------------------------------------- | -------- |
+| P0   | Codex CLI/SDK（`wire_api=chat` / `wire_api=responses`） | ✅       |
+| P0   | OpenAI SDK（JS/Python，chat + responses）                   | ✅       |
+| P0   | Vercel AI SDK（openai-compatible）                          | ✅       |
+| P0   | Anthropic SDK（messages）                                   | ✅       |
+| P0   | Google Gemini SDK（generateContent）                        | ✅       |
+| P1   | LangChain / LlamaIndex / OpenWebUI（OpenAI 兼容接入）       | ✅       |
 
 ## 模型支持
 
 ### OpenAI 接口（`GET /v1/models`）
 
-| 模型类型 | 模型 ID | thinking | search |
-| --- | --- | --- | --- |
-| default | `deepseek-v4-flash` | 默认开启，可由请求参数控制 | ❌ |
-| default | `deepseek-v4-flash-nothinking` | 永久关闭，不受请求参数影响 | ❌ |
-| expert | `deepseek-v4-pro` | 默认开启，可由请求参数控制 | ❌ |
-| expert | `deepseek-v4-pro-nothinking` | 永久关闭，不受请求参数影响 | ❌ |
-| default | `deepseek-v4-flash-search` | 默认开启，可由请求参数控制 | ✅ |
-| default | `deepseek-v4-flash-search-nothinking` | 永久关闭，不受请求参数影响 | ✅ |
-| vision | `deepseek-v4-vision` | 默认开启，可由请求参数控制 | ❌ |
-| vision | `deepseek-v4-vision-nothinking` | 永久关闭，不受请求参数影响 | ❌ |
+| 模型类型 | 模型 ID                                 | thinking                   | search |
+| -------- | --------------------------------------- | -------------------------- | ------ |
+| default  | `deepseek-v4-flash`                   | 默认开启，可由请求参数控制 | ❌     |
+| default  | `deepseek-v4-flash-nothinking`        | 永久关闭，不受请求参数影响 | ❌     |
+| default  | `deepseek-v4-flash-search`            | 默认开启，可由请求参数控制 | ✅     |
+| default  | `deepseek-v4-flash-search-nothinking` | 永久关闭，不受请求参数影响 | ✅     |
 
-除原生模型外，也支持常见 alias 输入（如 `gpt-4.1`、`gpt-5`、`gpt-5-codex`、`o3`、`claude-*`、`gemini-*` 等），但 `/v1/models` 返回的是规范化后的 DeepSeek 原生模型 ID。若 alias 名本身追加 `-nothinking` 后缀，也会映射到对应的强制关思考模型。完整 alias 行为以 [API.md](API.md#模型-alias-解析策略) 和 `config.example.json` 为准。
-当前上游视觉模型只暴露 `vision` 通道，不提供独立的联网搜索视觉变体。
+新版网页只保留 Flash 模型，thinking 与 search 是同一模型的独立开关，因此 `/v1/models` 仅暴露上述四种 Flash 开关组合。常见 OpenAI / Claude / Gemini alias 仍可作为兼容输入，但都会归一到 Flash 或 Flash Search，不再选择已移除的 Pro / Vision 类型。完整 alias 行为以 [API.md](API.md#模型-alias-解析策略) 和 `config.example.json` 为准。
 
 ### Claude 接口（`GET /anthropic/v1/models`）
 
-| 当前常用模型 | 默认映射 |
-| --- | --- |
-| `claude-sonnet-4-6` | `deepseek-v4-flash` |
-| `claude-sonnet-4-6-nothinking` | `deepseek-v4-flash-nothinking` |
-| `claude-haiku-4-5`（兼容 `claude-3-5-haiku-latest`） | `deepseek-v4-flash` |
-| `claude-haiku-4-5-nothinking` | `deepseek-v4-flash-nothinking` |
-| `claude-opus-4-6` | `deepseek-v4-pro` |
-| `claude-opus-4-6-nothinking` | `deepseek-v4-pro-nothinking` |
+| 当前常用模型                                             | 默认映射                         |
+| -------------------------------------------------------- | -------------------------------- |
+| `claude-sonnet-4-6`                                    | `deepseek-v4-flash`            |
+| `claude-sonnet-4-6-nothinking`                         | `deepseek-v4-flash-nothinking` |
+| `claude-haiku-4-5`（兼容 `claude-3-5-haiku-latest`） | `deepseek-v4-flash`            |
+| `claude-haiku-4-5-nothinking`                          | `deepseek-v4-flash-nothinking` |
+| `claude-opus-4-6`                                      | `deepseek-v4-flash`            |
+| `claude-opus-4-6-nothinking`                           | `deepseek-v4-flash-nothinking` |
 
 可通过配置中的 `model_aliases` 覆盖映射关系；若请求模型名带 `-nothinking`，会在最终映射结果上强制追加无思考语义。
 `/anthropic/v1/models` 除上述主别名外，还会返回 Claude 4.x snapshots、3.x 历史模型 ID 与常见 alias，便于旧客户端直接兼容。
@@ -342,10 +335,10 @@ go run ./cmd/ds2api
 
 调用业务接口（`/v1/*`、`/anthropic/*`、Gemini 路由）时支持两种模式：
 
-| 模式 | 说明 |
-| --- | --- |
-| **托管账号模式** | `Bearer` 或 `x-api-key` 传入 `config.keys` 中的 key，由服务自动轮询选择账号 |
-| **直通 token 模式** | 传入 token 不在 `config.keys` 中时，直接作为 DeepSeek token 使用 |
+| 模式                      | 说明                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| **托管账号模式**    | `Bearer` 或 `x-api-key` 传入 `config.keys` 中的 key，由服务自动轮询选择账号 |
+| **直通 token 模式** | 传入 token 不在`config.keys` 中时，直接作为 DeepSeek token 使用                 |
 
 可选请求头 `X-Ds2-Target-Account`：指定使用某个托管账号（值为 email 或 mobile）。
 如果指定账号不存在，或者当前管理账号队列已满，请求会返回 `429`；当前 `429` 不附带 `Retry-After` 头。若账号存在但登录/刷新失败，则返回对应的鉴权错误。
@@ -378,7 +371,7 @@ Gemini 路由还可以使用 `x-goog-api-key`，或在没有认证头时使用 `
 
 > 说明：当前版本 parser 层以”尽量解析成功”为优先，所有格式合法的 XML 工具调用都会通过，不做工具名 allow-list 过滤。
 > 解析层会保留显式空字符串或纯空白参数；Prompt 会要求模型不要主动输出空参数，缺参/空命令的拒绝应由工具执行侧或客户端 schema 校验负责。
-> 
+>
 > 想评估”把工具调用封装成 XML 再输入模型”的方案，可参考：`docs/toolcall-semantics.md`。
 
 ## 本地开发抓包工具
@@ -414,12 +407,12 @@ go run ./cmd/ds2api
 
 ## 文档索引
 
-| 文档 | 说明 |
-| --- | --- |
-| [API.md](API.md) / [API.en.md](API.en.md) | API 接口文档（含请求/响应示例） |
-| [DEPLOY.md](docs/DEPLOY.md) / [DEPLOY.en.md](docs/DEPLOY.en.md) | 部署指南（本地/Docker/Vercel/systemd） |
-| [CONTRIBUTING.md](docs/CONTRIBUTING.md) / [CONTRIBUTING.en.md](docs/CONTRIBUTING.en.md) | 贡献指南 |
-| [TESTING.md](docs/TESTING.md) | 测试集使用指南 |
+| 文档                                                                                  | 说明                                   |
+| ------------------------------------------------------------------------------------- | -------------------------------------- |
+| [API.md](API.md) / [API.en.md](API.en.md)                                               | API 接口文档（含请求/响应示例）        |
+| [DEPLOY.md](docs/DEPLOY.md) / [DEPLOY.en.md](docs/DEPLOY.en.md)                         | 部署指南（本地/Docker/Vercel/systemd） |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md) / [CONTRIBUTING.en.md](docs/CONTRIBUTING.en.md) | 贡献指南                               |
+| [TESTING.md](docs/TESTING.md)                                                          | 测试集使用指南                         |
 
 ## 测试
 
@@ -453,4 +446,3 @@ npm run build --prefix webui
 作者及仓库维护者不对因使用、修改、分发、部署或依赖本项目而产生的任何直接或间接损失、账号封禁、数据丢失、法律风险或第三方索赔负责。
 
 请勿将本项目用于违反服务条款、协议、法律法规或平台规则的场景。商业使用前请自行确认 `LICENSE`、相关协议以及你是否获得了作者的书面许可。
-

@@ -20,18 +20,13 @@ func (c *Client) CallCompletion(ctx context.Context, a *auth.RequestAuth, payloa
 	clients := c.requestClientsForAuth(ctx, a)
 	headers := c.authHeaders(a.DeepSeekToken)
 	headers["x-ds-pow-response"] = powResp
-	resp, err := c.callCompletionOnce(ctx, clients.stream, headers, a.AccountID, payload)
+	captureSession := c.capture.Start("deepseek_completion", dsprotocol.DeepSeekCompletionURL, a.AccountID, payload)
+	resp, err := c.streamPostOnce(ctx, clients.stream, dsprotocol.DeepSeekCompletionURL, headers, payload)
 	if err != nil {
 		return nil, err
 	}
-	if completionRejectsNewFlashModelType(resp, payload) {
-		legacyPayload := clonePayloadWithModelType(payload, "default")
-		config.Logger.Info("[deepseek_completion] retrying legacy flash model_type", "account", a.AccountID)
-		resp, err = c.callCompletionOnce(ctx, clients.stream, headers, a.AccountID, legacyPayload)
-		if err != nil {
-			return nil, err
-		}
-		payload = legacyPayload
+	if captureSession != nil {
+		resp.Body = captureSession.WrapBody(resp.Body, resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusOK {
 		newBody, muted, muteUntil, err := detectMutedCompletion(resp.Body)
@@ -49,49 +44,6 @@ func (c *Client) CallCompletion(ctx context.Context, a *auth.RequestAuth, payloa
 		resp = c.wrapCompletionWithAutoContinue(ctx, a, payload, powResp, resp)
 	}
 	return resp, nil
-}
-
-func (c *Client) callCompletionOnce(ctx context.Context, doer trans.Doer, headers map[string]string, accountID string, payload map[string]any) (*http.Response, error) {
-	captureSession := c.capture.Start("deepseek_completion", dsprotocol.DeepSeekCompletionURL, accountID, payload)
-	resp, err := c.streamPostOnce(ctx, doer, dsprotocol.DeepSeekCompletionURL, headers, payload)
-	if err != nil {
-		return nil, err
-	}
-	if captureSession != nil {
-		resp.Body = captureSession.WrapBody(resp.Body, resp.StatusCode)
-	}
-	return resp, nil
-}
-
-func completionRejectsNewFlashModelType(resp *http.Response, payload map[string]any) bool {
-	if resp == nil || resp.Body == nil || resp.StatusCode != http.StatusUnprocessableEntity {
-		return false
-	}
-	modelType, _ := payload["model_type"].(string)
-	if !strings.EqualFold(strings.TrimSpace(modelType), "deepseek-flash") {
-		return false
-	}
-	body, err := io.ReadAll(resp.Body)
-	if closeErr := resp.Body.Close(); closeErr != nil {
-		config.Logger.Warn("[deepseek_completion] response body close failed", "error", closeErr)
-	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	if err != nil {
-		return false
-	}
-	detail := strings.ToLower(string(body))
-	return strings.Contains(detail, "model_type") &&
-		strings.Contains(detail, "unknown variant") &&
-		strings.Contains(detail, "deepseek-flash")
-}
-
-func clonePayloadWithModelType(payload map[string]any, modelType string) map[string]any {
-	clone := make(map[string]any, len(payload))
-	for key, value := range payload {
-		clone[key] = value
-	}
-	clone["model_type"] = modelType
-	return clone
 }
 
 func (c *Client) streamPost(ctx context.Context, doer trans.Doer, url string, headers map[string]string, payload any) (*http.Response, error) {

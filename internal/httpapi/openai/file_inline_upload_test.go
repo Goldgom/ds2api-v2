@@ -166,7 +166,7 @@ func TestPreprocessInlineFileInputsDeduplicatesIdenticalPayloads(t *testing.T) {
 func TestChatCompletionsUploadsInlineFilesBeforeCompletion(t *testing.T) {
 	ds := &inlineUploadDSStub{}
 	h := &openAITestSurface{Store: mockOpenAIConfig{}, Auth: streamStatusAuthStub{}, DS: ds}
-	reqBody := `{"model":"deepseek-v4-vision","messages":[{"role":"user","content":[{"type":"input_text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJDRA=="}}]}],"stream":false}`
+	reqBody := `{"model":"deepseek-v4-flash","messages":[{"role":"user","content":[{"type":"input_text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJDRA=="}}]}],"stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
 	req.Header.Set("Authorization", "Bearer direct-token")
 	req.Header.Set("Content-Type", "application/json")
@@ -180,8 +180,8 @@ func TestChatCompletionsUploadsInlineFilesBeforeCompletion(t *testing.T) {
 	if len(ds.uploadCalls) != 1 {
 		t.Fatalf("expected 1 upload call, got %d", len(ds.uploadCalls))
 	}
-	if ds.uploadCalls[0].ModelType != "vision" {
-		t.Fatalf("expected vision model type for vision request, got %q", ds.uploadCalls[0].ModelType)
+	if ds.uploadCalls[0].ModelType != "default" {
+		t.Fatalf("expected default model type for flash request, got %q", ds.uploadCalls[0].ModelType)
 	}
 	if ds.completionReq == nil {
 		t.Fatal("expected completion payload to be captured")
@@ -211,8 +211,8 @@ func TestResponsesUploadsInlineFilesBeforeCompletion(t *testing.T) {
 	if len(ds.uploadCalls) != 1 {
 		t.Fatalf("expected 1 upload call, got %d", len(ds.uploadCalls))
 	}
-	if ds.uploadCalls[0].ModelType != "deepseek-flash" {
-		t.Fatalf("expected deepseek-flash model type for flash request, got %q", ds.uploadCalls[0].ModelType)
+	if ds.uploadCalls[0].ModelType != "default" {
+		t.Fatalf("expected default model type for flash request, got %q", ds.uploadCalls[0].ModelType)
 	}
 	refIDs, _ := ds.completionReq["ref_file_ids"].([]any)
 	if len(refIDs) != 1 || refIDs[0] != "file-inline-1" {

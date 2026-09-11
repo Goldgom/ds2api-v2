@@ -72,7 +72,7 @@ func TestNormalizeOpenAIChatRequestWithConfigInterface(t *testing.T) {
 func TestNormalizeOpenAIChatRequestDisablesThinkingForNoThinkingModel(t *testing.T) {
 	cfg := mockOpenAIConfig{}
 	req := map[string]any{
-		"model":            "deepseek-v4-pro-nothinking",
+		"model":            "deepseek-v4-flash-nothinking",
 		"messages":         []any{map[string]any{"role": "user", "content": "hello"}},
 		"reasoning_effort": "high",
 	}
@@ -80,14 +80,14 @@ func TestNormalizeOpenAIChatRequestDisablesThinkingForNoThinkingModel(t *testing
 	if err != nil {
 		t.Fatalf("promptcompat.NormalizeOpenAIChatRequest error: %v", err)
 	}
-	if out.ResolvedModel != "deepseek-v4-pro-nothinking" {
+	if out.ResolvedModel != "deepseek-v4-flash-nothinking" {
 		t.Fatalf("resolved model mismatch: got=%q", out.ResolvedModel)
 	}
 	if out.Thinking {
 		t.Fatalf("expected nothinking model to force thinking off")
 	}
 	if out.Search {
-		t.Fatalf("expected search=false for deepseek-v4-pro-nothinking, got=%v", out.Search)
+		t.Fatalf("expected search=false for deepseek-v4-flash-nothinking, got=%v", out.Search)
 	}
 }
 

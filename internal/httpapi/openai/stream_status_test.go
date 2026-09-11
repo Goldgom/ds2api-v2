@@ -314,7 +314,7 @@ func TestChatCompletionsStreamRetriesEmptyOutputOnSameSession(t *testing.T) {
 		Auth:  streamStatusAuthStub{},
 		DS:    ds,
 	}
-	reqBody := `{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	reqBody := `{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
 	req.Header.Set("Authorization", "Bearer direct-token")
 	req.Header.Set("Content-Type", "application/json")
@@ -374,7 +374,7 @@ func TestChatCompletionsNonStreamRetriesThinkingOnlyOutput(t *testing.T) {
 		Auth:  streamStatusAuthStub{},
 		DS:    ds,
 	}
-	reqBody := `{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	reqBody := `{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
 	req.Header.Set("Authorization", "Bearer direct-token")
 	req.Header.Set("Content-Type", "application/json")
@@ -486,7 +486,7 @@ func TestResponsesStreamRetriesThinkingOnlyOutput(t *testing.T) {
 		Auth:  streamStatusAuthStub{},
 		DS:    ds,
 	}
-	reqBody := `{"model":"deepseek-v4-pro","input":"hi","stream":true}`
+	reqBody := `{"model":"deepseek-v4-flash","input":"hi","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(reqBody))
 	req.Header.Set("Authorization", "Bearer direct-token")
 	req.Header.Set("Content-Type", "application/json")
@@ -525,7 +525,7 @@ func TestResponsesNonStreamRetriesThinkingOnlyOutput(t *testing.T) {
 		Auth:  streamStatusAuthStub{},
 		DS:    ds,
 	}
-	reqBody := `{"model":"deepseek-v4-pro","input":"hi","stream":false}`
+	reqBody := `{"model":"deepseek-v4-flash","input":"hi","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(reqBody))
 	req.Header.Set("Authorization", "Bearer direct-token")
 	req.Header.Set("Content-Type", "application/json")

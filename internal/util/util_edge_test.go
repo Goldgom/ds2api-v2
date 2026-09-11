@@ -338,7 +338,7 @@ func TestConvertClaudeToDeepSeekOpusUsesGlobalAlias(t *testing.T) {
 		"messages": []any{map[string]any{"role": "user", "content": "Hi"}},
 	}
 	out := ConvertClaudeToDeepSeek(req, store)
-	if out["model"] != "deepseek-v4-pro" {
+	if out["model"] != "deepseek-v4-flash" {
 		t.Fatalf("expected opus to use global alias, got %q", out["model"])
 	}
 }

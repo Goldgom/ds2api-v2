@@ -105,8 +105,8 @@ func TestClaudeProxyViaOpenAIUsesGlobalAliasMapping(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
 	}
-	if got := strings.TrimSpace(openAI.seenModel); got != "deepseek-v4-pro" {
-		t.Fatalf("expected mapped proxy model deepseek-v4-pro, got %q", got)
+	if got := strings.TrimSpace(openAI.seenModel); got != "deepseek-v4-flash" {
+		t.Fatalf("expected mapped proxy model deepseek-v4-flash, got %q", got)
 	}
 }
 

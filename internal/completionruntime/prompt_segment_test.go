@@ -49,18 +49,14 @@ func TestShouldSegmentExpertPrompt_UnderThresholdReturnsNil(t *testing.T) {
 	}
 }
 
-func TestShouldSegmentExpertPrompt_OverThresholdReturnsSegments(t *testing.T) {
+func TestShouldSegmentExpertPrompt_RemovedExpertModelReturnsNil(t *testing.T) {
 	stdReq := promptcompat.StandardRequest{
 		ResolvedModel: "deepseek-v4-pro",
 		FinalPrompt:   "<User>:" + stringRepeat("X", 200000) + "<Assistant>:",
 	}
 	opts := Options{ExpertPromptSegment: mockExpertSegmentConfig{enabled: true, maxChars: 1000}}
-	segs := shouldSegmentExpertPrompt(stdReq, opts)
-	if segs == nil {
-		t.Fatalf("expected segments for over-threshold expert prompt, got nil")
-	}
-	if len(segs) < 2 {
-		t.Fatalf("expected at least 2 segments, got %d", len(segs))
+	if segs := shouldSegmentExpertPrompt(stdReq, opts); segs != nil {
+		t.Fatalf("expected nil for removed expert model, got %d segments", len(segs))
 	}
 }
 

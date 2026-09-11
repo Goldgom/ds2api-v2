@@ -208,12 +208,8 @@ No auth required. Returns the currently supported DeepSeek native model list.
   "data": [
     {"id": "deepseek-v4-flash", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
     {"id": "deepseek-v4-flash-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-pro", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-pro-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
     {"id": "deepseek-v4-flash-search", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-flash-search-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-vision", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []},
-    {"id": "deepseek-v4-vision-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []}
+    {"id": "deepseek-v4-flash-search-nothinking", "object": "model", "created": 1677610602, "owned_by": "deepseek", "permission": []}
   ]
 }
 ```
@@ -239,7 +235,7 @@ Built-in aliases come from `internal/config/models.go`; `config.model_aliases` c
 
 Aliases with a `-nothinking` suffix also map to the corresponding forced no-thinking DeepSeek model.
 
-Current vision support resolves only to `deepseek-v4-vision` and does not expose a separate `vision-search` variant.
+The new web client exposes only the Flash model; thinking and search are independent switches. Built-in OpenAI, Claude, and Gemini aliases normalize to Flash or Flash Search, while removed Pro and Vision native IDs return `invalid_request_error`.
 
 Retired historical families such as `claude-1.*`, `claude-2.*`, `claude-instant-*`, and `gpt-3.5*` are explicitly rejected.
 
@@ -271,7 +267,7 @@ Content-Type: application/json
   "id": "<chat_session_id>",
   "object": "chat.completion",
   "created": 1738400000,
-  "model": "deepseek-v4-pro",
+  "model": "deepseek-v4-flash",
   "choices": [
     {
       "index": 0,
@@ -728,7 +724,7 @@ Returns sanitized config, including both `keys` and `api_keys`.
   ],
   "model_aliases": {
     "claude-sonnet-4-6": "deepseek-v4-flash",
-    "claude-opus-4-6": "deepseek-v4-pro"
+    "claude-opus-4-6": "deepseek-v4-flash"
   }
 }
 ```
@@ -752,7 +748,7 @@ If both `api_keys` and `keys` are sent, the structured `api_keys` entries win so
   ],
   "model_aliases": {
     "claude-sonnet-4-6": "deepseek-v4-flash",
-    "claude-opus-4-6": "deepseek-v4-pro"
+    "claude-opus-4-6": "deepseek-v4-flash"
   }
 }
 ```
@@ -1290,7 +1286,7 @@ curl http://localhost:5001/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "deepseek-v4-pro",
+    "model": "deepseek-v4-flash",
     "messages": [{"role": "user", "content": "Explain quantum entanglement"}],
     "stream": true
   }'

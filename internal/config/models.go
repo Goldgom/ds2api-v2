@@ -31,20 +31,14 @@ const noThinkingModelSuffix = "-nothinking"
 
 var deepSeekBaseModels = []ModelInfo{
 	{ID: "deepseek-v4-flash", Object: "model", Created: 1677610602, OwnedBy: "deepseek", Permission: []any{}},
-	{ID: "deepseek-v4-pro", Object: "model", Created: 1677610602, OwnedBy: "deepseek", Permission: []any{}},
 	{ID: "deepseek-v4-flash-search", Object: "model", Created: 1677610602, OwnedBy: "deepseek", Permission: []any{}},
-	{ID: "deepseek-v4-vision", Object: "model", Created: 1677610602, OwnedBy: "deepseek", Permission: []any{}},
 }
 
 var OllamaCapabilitiesModels = []OllamaCapabilitiesModelInfo{
 	{ID: "deepseek-v4-flash", Capabilities: []string{"tools", "thinking"}},
-	{ID: "deepseek-v4-pro", Capabilities: []string{"tools", "thinking"}},
 	{ID: "deepseek-v4-flash-search", Capabilities: []string{"tools", "thinking"}},
-	{ID: "deepseek-v4-vision", Capabilities: []string{"tools", "thinking", "vision"}},
 	{ID: "deepseek-v4-flash-nothinking", Capabilities: []string{"tools"}},
-	{ID: "deepseek-v4-pro-nothinking", Capabilities: []string{"tools"}},
 	{ID: "deepseek-v4-flash-search-nothinking", Capabilities: []string{"tools"}},
-	{ID: "deepseek-v4-vision-nothinking", Capabilities: []string{"tools", "vision"}},
 }
 
 var DeepSeekModels = appendNoThinkingVariants(deepSeekBaseModels)
@@ -87,7 +81,7 @@ func GetModelConfig(model string) (thinking bool, search bool, ok bool) {
 		return false, false, false
 	}
 	switch baseModel {
-	case "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-vision":
+	case "deepseek-v4-flash":
 		return !noThinking, false, true
 	case "deepseek-v4-flash-search":
 		return !noThinking, true, true
@@ -100,11 +94,7 @@ func GetModelType(model string) (modelType string, ok bool) {
 	baseModel, _ := splitNoThinkingModel(model)
 	switch baseModel {
 	case "deepseek-v4-flash", "deepseek-v4-flash-search":
-		return "deepseek-flash", true
-	case "deepseek-v4-pro":
-		return "expert", true
-	case "deepseek-v4-vision":
-		return "vision", true
+		return "default", true
 	default:
 		return "", false
 	}
@@ -146,36 +136,36 @@ func DefaultModelAliases() map[string]string {
 		"gpt-5-nano":          "deepseek-v4-flash",
 		"gpt-5.4-mini":        "deepseek-v4-flash",
 		"gpt-5.4-nano":        "deepseek-v4-flash",
-		"gpt-5-pro":           "deepseek-v4-pro",
-		"gpt-5.2-pro":         "deepseek-v4-pro",
-		"gpt-5.4-pro":         "deepseek-v4-pro",
-		"gpt-5.5-pro":         "deepseek-v4-pro",
-		"gpt-5-codex":         "deepseek-v4-pro",
-		"gpt-5.1-codex":       "deepseek-v4-pro",
-		"gpt-5.1-codex-mini":  "deepseek-v4-pro",
-		"gpt-5.1-codex-max":   "deepseek-v4-pro",
-		"gpt-5.2-codex":       "deepseek-v4-pro",
-		"gpt-5.3-codex":       "deepseek-v4-pro",
-		"codex-mini-latest":   "deepseek-v4-pro",
+		"gpt-5-pro":           "deepseek-v4-flash",
+		"gpt-5.2-pro":         "deepseek-v4-flash",
+		"gpt-5.4-pro":         "deepseek-v4-flash",
+		"gpt-5.5-pro":         "deepseek-v4-flash",
+		"gpt-5-codex":         "deepseek-v4-flash",
+		"gpt-5.1-codex":       "deepseek-v4-flash",
+		"gpt-5.1-codex-mini":  "deepseek-v4-flash",
+		"gpt-5.1-codex-max":   "deepseek-v4-flash",
+		"gpt-5.2-codex":       "deepseek-v4-flash",
+		"gpt-5.3-codex":       "deepseek-v4-flash",
+		"codex-mini-latest":   "deepseek-v4-flash",
 
 		// OpenAI reasoning / research families
-		"o1":                    "deepseek-v4-pro",
-		"o1-preview":            "deepseek-v4-pro",
-		"o1-mini":               "deepseek-v4-pro",
-		"o1-pro":                "deepseek-v4-pro",
-		"o3":                    "deepseek-v4-pro",
-		"o3-mini":               "deepseek-v4-pro",
-		"o3-pro":                "deepseek-v4-pro",
+		"o1":                    "deepseek-v4-flash",
+		"o1-preview":            "deepseek-v4-flash",
+		"o1-mini":               "deepseek-v4-flash",
+		"o1-pro":                "deepseek-v4-flash",
+		"o3":                    "deepseek-v4-flash",
+		"o3-mini":               "deepseek-v4-flash",
+		"o3-pro":                "deepseek-v4-flash",
 		"o3-deep-research":      "deepseek-v4-flash-search",
-		"o4-mini":               "deepseek-v4-pro",
+		"o4-mini":               "deepseek-v4-flash",
 		"o4-mini-deep-research": "deepseek-v4-flash-search",
 
 		// Claude current and historical aliases
-		"claude-opus-4-6":            "deepseek-v4-pro",
-		"claude-opus-4-1":            "deepseek-v4-pro",
-		"claude-opus-4-1-20250805":   "deepseek-v4-pro",
-		"claude-opus-4-0":            "deepseek-v4-pro",
-		"claude-opus-4-20250514":     "deepseek-v4-pro",
+		"claude-opus-4-6":            "deepseek-v4-flash",
+		"claude-opus-4-1":            "deepseek-v4-flash",
+		"claude-opus-4-1-20250805":   "deepseek-v4-flash",
+		"claude-opus-4-0":            "deepseek-v4-flash",
+		"claude-opus-4-20250514":     "deepseek-v4-flash",
 		"claude-sonnet-4-6":          "deepseek-v4-flash",
 		"claude-sonnet-4-5":          "deepseek-v4-flash",
 		"claude-sonnet-4-5-20250929": "deepseek-v4-flash",
@@ -193,28 +183,28 @@ func DefaultModelAliases() map[string]string {
 		"claude-3-5-haiku":           "deepseek-v4-flash",
 		"claude-3-5-haiku-latest":    "deepseek-v4-flash",
 		"claude-3-5-haiku-20241022":  "deepseek-v4-flash",
-		"claude-3-opus":              "deepseek-v4-pro",
-		"claude-3-opus-20240229":     "deepseek-v4-pro",
+		"claude-3-opus":              "deepseek-v4-flash",
+		"claude-3-opus-20240229":     "deepseek-v4-flash",
 		"claude-3-sonnet":            "deepseek-v4-flash",
 		"claude-3-sonnet-20240229":   "deepseek-v4-flash",
 		"claude-3-haiku":             "deepseek-v4-flash",
 		"claude-3-haiku-20240307":    "deepseek-v4-flash",
 
 		// Gemini current and historical text / multimodal models
-		"gemini-pro":            "deepseek-v4-pro",
-		"gemini-pro-vision":     "deepseek-v4-vision",
-		"gemini-pro-latest":     "deepseek-v4-pro",
+		"gemini-pro":            "deepseek-v4-flash",
+		"gemini-pro-vision":     "deepseek-v4-flash",
+		"gemini-pro-latest":     "deepseek-v4-flash",
 		"gemini-flash-latest":   "deepseek-v4-flash",
-		"gemini-1.5-pro":        "deepseek-v4-pro",
+		"gemini-1.5-pro":        "deepseek-v4-flash",
 		"gemini-1.5-flash":      "deepseek-v4-flash",
 		"gemini-1.5-flash-8b":   "deepseek-v4-flash",
 		"gemini-2.0-flash":      "deepseek-v4-flash",
 		"gemini-2.0-flash-lite": "deepseek-v4-flash",
-		"gemini-2.5-pro":        "deepseek-v4-pro",
+		"gemini-2.5-pro":        "deepseek-v4-flash",
 		"gemini-2.5-flash":      "deepseek-v4-flash",
 		"gemini-2.5-flash-lite": "deepseek-v4-flash",
-		"gemini-3.1-pro":        "deepseek-v4-pro",
-		"gemini-3-pro":          "deepseek-v4-pro",
+		"gemini-3.1-pro":        "deepseek-v4-flash",
+		"gemini-3-pro":          "deepseek-v4-flash",
 		"gemini-3-flash":        "deepseek-v4-flash",
 		"gemini-3.1-flash":      "deepseek-v4-flash",
 		"gemini-3.1-flash-lite": "deepseek-v4-flash",

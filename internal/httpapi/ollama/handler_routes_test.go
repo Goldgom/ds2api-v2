@@ -88,25 +88,25 @@ func TestGetOllamaModelRoute(t *testing.T) {
 		}
 	})
 
-	t.Run("direct_expert", func(t *testing.T) {
+	t.Run("removed_pro", func(t *testing.T) {
 		body := `{"model":"deepseek-v4-pro"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/show", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
-	t.Run("direct_vision", func(t *testing.T) {
+	t.Run("removed_vision", func(t *testing.T) {
 		body := `{"model":"deepseek-v4-vision"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/show", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
 		}
 	})
 }
