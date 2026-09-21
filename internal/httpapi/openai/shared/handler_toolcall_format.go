@@ -70,26 +70,32 @@ func FilterIncrementalToolCallDeltasByAllowed(deltas []toolstream.ToolCallDelta,
 	return out
 }
 
-func FormatFinalStreamToolCallsWithStableIDs(calls []toolcall.ParsedToolCall, ids map[int]string, toolsRaw any) []map[string]any {
+// FormatFinalStreamToolCallsFromIndex formats complete tool calls starting at
+// indexBase. OpenAI identifies a tool call inside one assistant message by its
+// index, so calls emitted in separate deltas (for example one block per
+// continue round) must keep advancing the index and must keep the id that was
+// assigned to that index.
+func FormatFinalStreamToolCallsFromIndex(calls []toolcall.ParsedToolCall, ids map[int]string, toolsRaw any, indexBase int) []map[string]any {
 	if len(calls) == 0 {
 		return nil
 	}
 	normalizedCalls := toolcall.NormalizeParsedToolCallsForSchemas(calls, toolsRaw)
 	out := make([]map[string]any, 0, len(calls))
 	for i, c := range normalizedCalls {
+		callIndex := indexBase + i
 		callID := ""
 		if ids != nil {
-			callID = strings.TrimSpace(ids[i])
+			callID = strings.TrimSpace(ids[callIndex])
 		}
 		if callID == "" {
 			callID = "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 			if ids != nil {
-				ids[i] = callID
+				ids[callIndex] = callID
 			}
 		}
 		args, _ := json.Marshal(c.Input)
 		out = append(out, map[string]any{
-			"index": i,
+			"index": callIndex,
 			"id":    callID,
 			"type":  "function",
 			"function": map[string]any{

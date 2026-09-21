@@ -74,16 +74,13 @@ func CollectStream(resp *http.Response, thinkingEnabled bool, closeBody bool) Co
 		}
 		for _, p := range result.Parts {
 			if p.Type == "thinking" {
-				trimmed := TrimContinuationOverlap(thinking.String(), p.Text)
-				thinking.WriteString(trimmed)
+				thinking.WriteString(TrimContinuationOverlapFromBuilder(&thinking, p.Text))
 			} else {
-				trimmed := TrimContinuationOverlap(text.String(), p.Text)
-				text.WriteString(trimmed)
+				text.WriteString(TrimContinuationOverlapFromBuilder(&text, p.Text))
 			}
 		}
 		for _, p := range result.ToolDetectionThinkingParts {
-			trimmed := TrimContinuationOverlap(toolDetectionThinking.String(), p.Text)
-			toolDetectionThinking.WriteString(trimmed)
+			toolDetectionThinking.WriteString(TrimContinuationOverlapFromBuilder(&toolDetectionThinking, p.Text))
 		}
 		return true
 	})

@@ -115,7 +115,14 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 		if p.Type == "thinking" {
 			rawTrimmed = sse.TrimContinuationOverlapFromBuilder(&s.rawThinking, p.Text)
 		} else {
-			rawTrimmed = sse.TrimContinuationOverlapFromBuilder(&s.rawText, p.Text)
+			var rewound bool
+			rawTrimmed, rewound = sse.TrimContinuationReplayFromBuilder(&s.rawText, p.Text)
+			if rewound {
+				// The upstream replayed a snapshot that diverged from the
+				// accumulated text, so the stale tail was dropped. Sieve state
+				// derived from it must be dropped as well.
+				s.sieve = toolstream.State{}
+			}
 		}
 		if rawTrimmed == "" {
 			continue

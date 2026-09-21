@@ -274,6 +274,12 @@ func (s *responsesStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Pa
 
 	batch := responsesDeltaBatch{runtime: s}
 	accumulated := s.accumulator.Apply(parsed)
+	if accumulated.Replayed {
+		// The upstream replayed a snapshot that diverged from the accumulated
+		// text, so the accumulator dropped the stale tail. Sieve state derived
+		// from that tail must be dropped with it.
+		s.sieve = toolstream.State{}
+	}
 	for _, p := range accumulated.Parts {
 		if p.Type == "thinking" {
 			batch.append("reasoning", p.VisibleText)

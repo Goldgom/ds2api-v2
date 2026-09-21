@@ -37,6 +37,7 @@ const {
 } = require('./vercel_stream');
 const {
   trimContinuationOverlap,
+  resolveContinuationReplay,
 } = require('./dedupe');
 
 async function handler(req, res) {
@@ -125,4 +126,5 @@ module.exports.__test = {
   isNodeStreamSupportedPath,
   extractPathname,
   trimContinuationOverlap,
+  resolveContinuationReplay,
 };

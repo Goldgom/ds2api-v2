@@ -147,9 +147,9 @@ func ExecuteNonStreamStartedWithRetry(ctx context.Context, ds DeepSeekCaller, a 
 			}
 			return NonStreamResult{SessionID: sessionID, Payload: payload, Attempts: attempts}, outErr
 		}
-		accumulatedThinking += sse.TrimContinuationOverlap(accumulatedThinking, turn.Thinking)
-		accumulatedRawThinking += sse.TrimContinuationOverlap(accumulatedRawThinking, turn.RawThinking)
-		accumulatedToolDetectionThinking += sse.TrimContinuationOverlap(accumulatedToolDetectionThinking, turn.DetectionThinking)
+		accumulatedThinking = sse.ApplyContinuationReplay(accumulatedThinking, turn.Thinking)
+		accumulatedRawThinking = sse.ApplyContinuationReplay(accumulatedRawThinking, turn.RawThinking)
+		accumulatedToolDetectionThinking = sse.ApplyContinuationReplay(accumulatedToolDetectionThinking, turn.DetectionThinking)
 		turn.Thinking = accumulatedThinking
 		turn.RawThinking = accumulatedRawThinking
 		turn.DetectionThinking = accumulatedToolDetectionThinking

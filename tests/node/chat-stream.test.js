@@ -29,6 +29,7 @@ const {
   isNodeStreamSupportedPath,
   extractPathname,
   trimContinuationOverlap,
+  resolveContinuationReplay,
 } = handler.__test;
 
 function createMockResponse() {
@@ -927,4 +928,52 @@ test('trimContinuationOverlap preserves short normal tokens and trims long snaps
   const existing = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
   const incoming = `${existing}继续分析`;
   assert.equal(trimContinuationOverlap(existing, incoming), '继续分析');
+});
+
+test('resolveContinuationReplay drops an identical snapshot replay', () => {
+  const existing = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
+  const replay = resolveContinuationReplay(existing, existing);
+  assert.equal(replay.append, '');
+  assert.equal(replay.kept, existing);
+  assert.equal(replay.dropped, false);
+});
+
+test('resolveContinuationReplay drops the stale tail of a diverged snapshot', () => {
+  const head = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
+  const replay = resolveContinuationReplay(`${head}旧的结尾`, `${head}重写后的结尾`);
+  assert.equal(replay.kept, head);
+  assert.equal(replay.append, '重写后的结尾');
+  assert.equal(replay.dropped, true);
+});
+
+test('resolveContinuationReplay ignores an increment the snapshot already carries', () => {
+  const head = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
+  const increment = ' 另外补充第一点。';
+  const replay = resolveContinuationReplay(head, `${increment}${head}${increment}`);
+  assert.equal(replay.kept + replay.append, head + increment);
+  assert.equal(replay.dropped, false);
+});
+
+test('resolveContinuationReplay keeps one copy across continue rounds', () => {
+  let body = '第一段很长很长很长很长的回答内容，用来验证多轮 continue 不会重复累积。';
+  let accumulated = body;
+  for (const suffix of [' 第二段补充。', ' 第三段补充。', ' 第四段补充。']) {
+    body += suffix;
+    const replay = resolveContinuationReplay(accumulated, body);
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(accumulated, body);
+});
+
+test('resolveContinuationReplay keeps one copy when the transport coalesces rounds', () => {
+  let body = '第一段很长很长很长很长的回答内容，用来验证传输层合并后的快照重放。';
+  let accumulated = body;
+  for (const suffix of [' 第二段补充。', ' 第三段补充。']) {
+    accumulated = (() => {
+      const replay = resolveContinuationReplay(accumulated, `${suffix}${body}${suffix}`);
+      return replay.kept + replay.append;
+    })();
+    body += suffix;
+  }
+  assert.equal(accumulated, body);
 });

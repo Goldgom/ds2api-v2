@@ -113,3 +113,30 @@ func TestStreamAccumulatorStripsInlineCitationAndReferenceMarkers(t *testing.T) 
 		t.Fatalf("unexpected parts: %#v", result.Parts)
 	}
 }
+
+func TestStreamAccumulatorReportsAndRewindsDivergedReplay(t *testing.T) {
+	acc := StreamAccumulator{}
+	head := "我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。"
+
+	first := acc.Apply(sse.LineResult{
+		Parsed: true,
+		Parts:  []sse.ContentPart{{Type: "text", Text: head + "旧的结尾"}},
+	})
+	if first.Replayed {
+		t.Fatalf("expected the first chunk to be an ordinary increment")
+	}
+
+	second := acc.Apply(sse.LineResult{
+		Parsed: true,
+		Parts:  []sse.ContentPart{{Type: "text", Text: head + "重写后的结尾"}},
+	})
+	if !second.Replayed {
+		t.Fatalf("expected the diverged replay to be reported, got %#v", second)
+	}
+	if got := acc.RawText.String(); got != head+"重写后的结尾" {
+		t.Fatalf("raw text = %q", got)
+	}
+	if got := acc.Text.String(); got != head+"重写后的结尾" {
+		t.Fatalf("visible text = %q", got)
+	}
+}

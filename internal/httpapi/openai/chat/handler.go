@@ -124,6 +124,6 @@ func filterIncrementalToolCallDeltasByAllowed(deltas []toolstream.ToolCallDelta,
 	return shared.FilterIncrementalToolCallDeltasByAllowed(deltas, seenNames)
 }
 
-func formatFinalStreamToolCallsWithStableIDs(calls []toolcall.ParsedToolCall, ids map[int]string, toolsRaw any) []map[string]any {
-	return shared.FormatFinalStreamToolCallsWithStableIDs(calls, ids, toolsRaw)
+func formatFinalStreamToolCallsFromIndex(calls []toolcall.ParsedToolCall, ids map[int]string, toolsRaw any, indexBase int) []map[string]any {
+	return shared.FormatFinalStreamToolCallsFromIndex(calls, ids, toolsRaw, indexBase)
 }

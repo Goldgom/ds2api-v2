@@ -116,3 +116,31 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 - 空参数结构化保留，malformed executable-looking XML wrapper 作为文本释放
 - 非兼容内容按普通文本透传
 - 代码块示例不执行
+
+## 7) continue 续写重放与流式 tool_call 索引
+
+每个 `continue` 轮次开头，上游都会重发整条消息的快照（形如
+`{"v":{"response":{...,"fragments":[{"type":"RESPONSE","content":"<完整消息>"}]}}}`）。如果原样追加该快照，整条消息（包括其中的 EPSE 工具块）会被再写一遍，工具 sieve 随后会把同一段工具块解析成第二个调用并分配新的 `id`；每多一个轮次就多一份，客户端就会看到同一个调用重复好几遍。
+
+去重规则在 Go `internal/sse/dedupe.go` 与 Node `internal/js/chat-stream/dedupe.js` 中保持一致：
+
+- 小于 32 个字符的块一律按普通增量处理，不去重（短 token 与已有文本重合属于正常输出）。
+- `incoming` 以已累积文本开头：只追加多出来的尾巴。
+- `incoming` 是已累积文本的前缀（含两者完全相等）：整块丢弃，不追加。
+- 双方共享足够长的开头、但在其后分叉（上游重写了结尾）：保留共享开头，丢弃已累积文本里被重写掉的尾巴，只追加重写后的部分。此时 `Dropped` / `dropped` 为真，调用方必须同时重建由被丢弃文本派生的状态（工具 sieve）。
+- 传输层可能把上一轮尚未下发的增量与下一轮快照合并进同一个块：此时在块内部定位快照起点，块前缀属于快照已经包含的增量，直接丢弃，只保留快照的新尾巴。
+
+流式 `tool_calls` 的 `index` 与 `id` 约定（Go / Node 一致）：
+
+- 同一条 assistant 消息内 `index` 全局递增，跨 `continue` 轮次接着已有 `index` 继续分配，`id` 按 `index` 复用且不在轮次之间清空。否则两个不同的调用会同时占用 `index: 0`，客户端按 index 合并后只会得到拼接坏的参数，或把同一个调用显示多遍。
+- 模型在同一轮内用完全相同的参数连续调用同一工具时，两次都会照常输出，不会被去重。
+- 只有“此前已发射过、且其后发生过快照重放丢弃”的完全相同调用，才会被当作回放回声丢弃。
+
+对应的回归测试：
+
+```bash
+go test -v -run 'TestResolveContinuationReplay|TestApplyContinuationReplay' ./internal/sse/
+go test -v -run 'TestStreamAccumulatorReportsAndRewindsDivergedReplay' ./internal/httpapi/openai/shared/
+go test -v -run 'TestHandleStreamReplayedToolCallBlockEmitsOneCall|TestHandleStreamContinueRoundsDoNotDuplicateToolCalls|TestHandleStreamDivergedReplayKeepsSingleToolCall|TestHandleStreamKeepsIntentionallyRepeatedIdenticalCalls' ./internal/httpapi/openai/chat/
+node --test tests/node/chat-stream.test.js
+```

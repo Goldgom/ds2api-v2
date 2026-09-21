@@ -11,6 +11,7 @@ import (
 	"ds2api/internal/promptcompat"
 	"ds2api/internal/sse"
 	streamengine "ds2api/internal/stream"
+	"ds2api/internal/toolcall"
 	"ds2api/internal/toolstream"
 )
 
@@ -41,6 +42,15 @@ type chatStreamRuntime struct {
 	toolSieve         toolstream.State
 	streamToolCallIDs map[int]string
 	streamToolNames   map[int]string
+	// toolCallIndexBase is the next OpenAI tool_call index for this assistant
+	// message. Indexes keep increasing across the whole message so calls that
+	// arrive in separate continue rounds do not collide on index 0.
+	toolCallIndexBase int
+	// emittedCallEpoch records the replay epoch a tool call was emitted in.
+	// A call that reappears after the upstream replayed a snapshot was dropped
+	// from the accumulator is an echo of that replay, not a new call.
+	emittedCallEpoch  map[string]uint64
+	replayEpoch       uint64
 	accumulator       shared.StreamAccumulator
 	responseMessageID int
 	upstreamErr       string
@@ -115,6 +125,7 @@ func newChatStreamRuntime(
 		emitEarlyToolDeltas:   emitEarlyToolDeltas,
 		streamToolCallIDs:     map[int]string{},
 		streamToolNames:       map[int]string{},
+		emittedCallEpoch:      map[string]uint64{},
 		accumulator: shared.StreamAccumulator{
 			ThinkingEnabled:       thinkingEnabled,
 			SearchEnabled:         searchEnabled,
@@ -208,9 +219,37 @@ func (s *chatStreamRuntime) historyThinking() string {
 	)
 }
 
-func (s *chatStreamRuntime) resetStreamToolCallState() {
-	s.streamToolCallIDs = map[int]string{}
-	s.streamToolNames = map[int]string{}
+func toolCallSignature(c toolcall.ParsedToolCall) string {
+	args, _ := json.Marshal(c.Input)
+	return c.Name + "\x00" + string(args)
+}
+
+// emitToolCalls sends complete tool calls as one streamed delta.
+//
+// A call whose exact name+arguments was already emitted in an earlier replay
+// epoch is an echo of the snapshot the upstream replayed and that was dropped
+// from the accumulator, so it is skipped. Calls that repeat inside the same
+// replay epoch are kept: the model is allowed to call the same tool twice with
+// the same arguments.
+func (s *chatStreamRuntime) emitToolCalls(calls []toolcall.ParsedToolCall) {
+	if len(calls) == 0 {
+		return
+	}
+	fresh := make([]toolcall.ParsedToolCall, 0, len(calls))
+	for _, call := range calls {
+		sig := toolCallSignature(call)
+		if epoch, ok := s.emittedCallEpoch[sig]; ok && epoch < s.replayEpoch {
+			continue
+		}
+		s.emittedCallEpoch[sig] = s.replayEpoch
+		fresh = append(fresh, call)
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	formatted := formatFinalStreamToolCallsFromIndex(fresh, s.streamToolCallIDs, s.toolsRaw, s.toolCallIndexBase)
+	s.toolCallIndexBase += len(formatted)
+	s.sendDelta(map[string]any{"tool_calls": formatted})
 }
 
 func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool) bool {
@@ -244,9 +283,7 @@ func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool)
 	s.finalThinking = turn.Thinking
 	s.finalText = turn.Text
 	if len(turn.ToolCalls) > 0 && !s.toolCallsDoneEmitted {
-		s.sendDelta(map[string]any{
-			"tool_calls": formatFinalStreamToolCallsWithStableIDs(turn.ToolCalls, s.streamToolCallIDs, s.toolsRaw),
-		})
+		s.emitToolCalls(turn.ToolCalls)
 		s.toolCallsEmitted = true
 		s.toolCallsDoneEmitted = true
 	} else if s.bufferToolContent {
@@ -256,10 +293,7 @@ func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool)
 				batch.flush()
 				s.toolCallsEmitted = true
 				s.toolCallsDoneEmitted = true
-				s.sendDelta(map[string]any{
-					"tool_calls": formatFinalStreamToolCallsWithStableIDs(evt.ToolCalls, s.streamToolCallIDs, s.toolsRaw),
-				})
-				s.resetStreamToolCallState()
+				s.emitToolCalls(evt.ToolCalls)
 			}
 			if evt.Content == "" {
 				continue
@@ -324,6 +358,13 @@ func (s *chatStreamRuntime) onParsed(parsed sse.LineResult) streamengine.ParsedD
 
 	batch := chatDeltaBatch{runtime: s}
 	accumulated := s.accumulator.Apply(parsed)
+	if accumulated.Replayed {
+		// The upstream replayed a snapshot that diverged from the accumulated
+		// text, so the accumulator dropped the stale tail. Sieve state derived
+		// from that tail must be dropped with it.
+		s.toolSieve = toolstream.State{}
+		s.replayEpoch++
+	}
 	for _, p := range accumulated.Parts {
 		if p.Type == "thinking" {
 			batch.append("reasoning_content", p.VisibleText)
@@ -364,11 +405,7 @@ func (s *chatStreamRuntime) onParsed(parsed sse.LineResult) streamengine.ParsedD
 					batch.flush()
 					s.toolCallsEmitted = true
 					s.toolCallsDoneEmitted = true
-					tcDelta := map[string]any{
-						"tool_calls": formatFinalStreamToolCallsWithStableIDs(evt.ToolCalls, s.streamToolCallIDs, s.toolsRaw),
-					}
-					s.sendDelta(tcDelta)
-					s.resetStreamToolCallState()
+					s.emitToolCalls(evt.ToolCalls)
 					continue
 				}
 				if evt.Content != "" {

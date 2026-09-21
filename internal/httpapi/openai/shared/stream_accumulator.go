@@ -23,17 +23,27 @@ type StreamPartDelta struct {
 	RawText      string
 	VisibleText  string
 	CitationOnly bool
+	// Replayed is set when this part replayed an already accumulated snapshot
+	// and the diverged tail of the accumulated text was dropped.
+	Replayed bool
 }
 
 type StreamAccumulatorResult struct {
 	ContentSeen bool
-	Parts       []StreamPartDelta
+	// Replayed is set when a chunk replayed a snapshot that diverged from the
+	// accumulated text, so the tail of that text was dropped. State derived
+	// from the dropped tail (such as a tool-call sieve) has to be rebuilt.
+	Replayed bool
+	Parts    []StreamPartDelta
 }
 
 func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult {
 	out := StreamAccumulatorResult{}
 	for _, p := range parsed.ToolDetectionThinkingParts {
-		trimmed := sse.TrimContinuationOverlapFromBuilder(&a.ToolDetectionThinking, p.Text)
+		trimmed, replayed := sse.TrimContinuationReplayFromBuilder(&a.ToolDetectionThinking, p.Text)
+		if replayed {
+			out.Replayed = true
+		}
 		if trimmed != "" {
 			a.ToolDetectionThinking.WriteString(trimmed)
 		}
@@ -41,6 +51,9 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 	for _, p := range parsed.Parts {
 		if p.Type == "thinking" {
 			delta := a.applyThinkingPart(p.Text)
+			if delta.Replayed {
+				out.Replayed = true
+			}
 			if delta.RawText != "" {
 				out.ContentSeen = true
 			}
@@ -50,6 +63,9 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 			continue
 		}
 		delta := a.applyTextPart(p.Text)
+		if delta.Replayed {
+			out.Replayed = true
+		}
 		if delta.RawText != "" {
 			out.ContentSeen = true
 		}
@@ -61,44 +77,57 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 }
 
 func (a *StreamAccumulator) applyThinkingPart(text string) StreamPartDelta {
-	rawTrimmed := sse.TrimContinuationOverlapFromBuilder(&a.RawThinking, text)
-	if rawTrimmed != "" {
-		a.RawThinking.WriteString(rawTrimmed)
+	replay := sse.ResolveContinuationReplay(a.RawThinking.String(), text)
+	if replay.Dropped {
+		a.RawThinking.Reset()
+		a.RawThinking.WriteString(replay.Kept)
+		a.Thinking.Reset()
+		a.Thinking.WriteString(CleanVisibleOutput(replay.Kept, a.StripReferenceMarkers))
 	}
-	delta := StreamPartDelta{Type: "thinking", RawText: rawTrimmed}
-	if !a.ThinkingEnabled || rawTrimmed == "" {
+	if replay.Append == "" {
+		return StreamPartDelta{Type: "thinking", Replayed: replay.Dropped}
+	}
+	a.RawThinking.WriteString(replay.Append)
+	delta := StreamPartDelta{Type: "thinking", RawText: replay.Append, Replayed: replay.Dropped}
+	if !a.ThinkingEnabled {
 		return delta
 	}
-	cleanedText := CleanVisibleOutput(rawTrimmed, a.StripReferenceMarkers)
+	cleanedText := CleanVisibleOutput(replay.Append, a.StripReferenceMarkers)
 	if cleanedText == "" {
 		return delta
 	}
-	trimmed := sse.TrimContinuationOverlapFromBuilder(&a.Thinking, cleanedText)
-	if trimmed == "" {
+	visible := sse.ResolveContinuationReplay(a.Thinking.String(), cleanedText)
+	if visible.Append == "" {
 		return delta
 	}
-	a.Thinking.WriteString(trimmed)
-	delta.VisibleText = trimmed
+	a.Thinking.WriteString(visible.Append)
+	delta.VisibleText = visible.Append
 	return delta
 }
 
 func (a *StreamAccumulator) applyTextPart(text string) StreamPartDelta {
-	rawTrimmed := sse.TrimContinuationOverlapFromBuilder(&a.RawText, text)
-	if rawTrimmed == "" {
-		return StreamPartDelta{Type: "text"}
+	replay := sse.ResolveContinuationReplay(a.RawText.String(), text)
+	if replay.Dropped {
+		a.RawText.Reset()
+		a.RawText.WriteString(replay.Kept)
+		a.Text.Reset()
+		a.Text.WriteString(CleanVisibleOutput(replay.Kept, a.StripReferenceMarkers))
 	}
-	a.RawText.WriteString(rawTrimmed)
-	delta := StreamPartDelta{Type: "text", RawText: rawTrimmed}
-	if a.SearchEnabled && sse.IsCitation(rawTrimmed) {
+	if replay.Append == "" {
+		return StreamPartDelta{Type: "text", Replayed: replay.Dropped}
+	}
+	a.RawText.WriteString(replay.Append)
+	delta := StreamPartDelta{Type: "text", RawText: replay.Append, Replayed: replay.Dropped}
+	if a.SearchEnabled && sse.IsCitation(replay.Append) {
 		delta.CitationOnly = true
 		return delta
 	}
-	cleanedText := CleanVisibleOutput(rawTrimmed, a.StripReferenceMarkers)
-	trimmed := sse.TrimContinuationOverlapFromBuilder(&a.Text, cleanedText)
-	if trimmed == "" {
+	cleanedText := CleanVisibleOutput(replay.Append, a.StripReferenceMarkers)
+	visible := sse.ResolveContinuationReplay(a.Text.String(), cleanedText)
+	if visible.Append == "" {
 		return delta
 	}
-	a.Text.WriteString(trimmed)
-	delta.VisibleText = trimmed
+	a.Text.WriteString(visible.Append)
+	delta.VisibleText = visible.Append
 	return delta
 }

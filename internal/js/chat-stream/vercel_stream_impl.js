@@ -17,7 +17,6 @@ const {
   resolveToolcallPolicy,
   formatIncrementalToolCallDeltas,
   filterIncrementalToolCallDeltasByAllowed,
-  resetStreamToolCallState,
 } = require('./toolcall_policy');
 const { createChatCompletionEmitter, createDeltaCoalescer } = require('./stream_emitter');
 const {
@@ -30,7 +29,7 @@ const {
   createLeaseReleaser,
 } = require('./http_internal');
 const {
-  trimContinuationOverlap,
+  resolveContinuationReplay,
 } = require('./dedupe');
 
 const DEEPSEEK_COMPLETION_URL = 'https://chat.deepseek.com/api/v0/chat/completion';
@@ -177,11 +176,19 @@ async function handleVercelStream(req, res, rawBody, payload) {
     let outputText = '';
     let usagePrompt = finalPrompt;
     const toolSieveEnabled = toolPolicy.toolSieveEnabled;
-    const toolSieveState = createToolSieveState();
+    let toolSieveState = createToolSieveState();
     let toolCallsEmitted = false;
     let toolCallsDoneEmitted = false;
     const streamToolCallIDs = new Map();
     const streamToolNames = new Map();
+    // OpenAI identifies a tool call inside one assistant message by index, so
+    // indexes keep increasing across the whole message and the id assigned to
+    // an index is never reused after a continue round.
+    let toolCallIndexBase = 0;
+    // A call that reappears after the upstream replayed a snapshot that was
+    // dropped is an echo of that replay, not a new call.
+    const emittedCallEpoch = new Map();
+    let replayEpoch = 0;
     const decoder = new TextDecoder();
     let buffered = '';
     let ended = false;
@@ -194,6 +201,32 @@ async function handleVercelStream(req, res, rawBody, payload) {
       isClosed: () => clientClosed,
     });
     const deltaCoalescer = createDeltaCoalescer({ sendDeltaFrame });
+
+    // emitToolCalls sends complete tool calls as one streamed delta, dropping
+    // echoes of a snapshot the upstream replayed and that was dropped from the
+    // accumulated text. Calls that repeat inside the same replay epoch are
+    // kept: the model may call the same tool twice with the same arguments.
+    const emitToolCalls = (calls) => {
+      if (!Array.isArray(calls) || calls.length === 0) {
+        return;
+      }
+      const fresh = [];
+      for (const call of calls) {
+        const sig = toolCallSignature(call);
+        const epoch = emittedCallEpoch.get(sig);
+        if (epoch !== undefined && epoch < replayEpoch) {
+          continue;
+        }
+        emittedCallEpoch.set(sig, replayEpoch);
+        fresh.push(call);
+      }
+      if (fresh.length === 0) {
+        return;
+      }
+      const formatted = formatOpenAIStreamToolCalls(fresh, streamToolCallIDs, payload.tools, toolCallIndexBase);
+      toolCallIndexBase += formatted.length;
+      sendDeltaFrame({ tool_calls: formatted });
+    };
 
     const finish = async (reason, options = {}) => {
       if (ended) {
@@ -209,7 +242,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
       if (detected.length > 0 && !toolCallsDoneEmitted) {
         toolCallsEmitted = true;
         toolCallsDoneEmitted = true;
-        sendDeltaFrame({ tool_calls: formatOpenAIStreamToolCalls(detected, streamToolCallIDs, payload.tools) });
+        emitToolCalls(detected);
       } else if (toolSieveEnabled) {
         const tailEvents = flushToolSieve(toolSieveState, toolNames);
         for (const evt of tailEvents) {
@@ -217,8 +250,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
             deltaCoalescer.flush();
             toolCallsEmitted = true;
             toolCallsDoneEmitted = true;
-            sendDeltaFrame({ tool_calls: formatOpenAIStreamToolCalls(evt.calls, streamToolCallIDs, payload.tools) });
-            resetStreamToolCallState(streamToolCallIDs, streamToolNames);
+            emitToolCalls(evt.calls);
             continue;
           }
           if (evt.text) {
@@ -329,27 +361,37 @@ async function handleVercelStream(req, res, rawBody, payload) {
                 }
                 if (p.type === 'thinking') {
                   if (thinkingEnabled) {
-                    const trimmed = trimContinuationOverlap(thinkingText, p.text);
-                    if (!trimmed) {
+                    const replay = resolveContinuationReplay(thinkingText, p.text);
+                    if (replay.dropped) {
+                      thinkingText = replay.kept;
+                      toolSieveState = createToolSieveState();
+                      replayEpoch += 1;
+                    }
+                    if (!replay.append) {
                       continue;
                     }
-                    thinkingText += trimmed;
-                    deltaCoalescer.append('reasoning_content', trimmed);
+                    thinkingText += replay.append;
+                    deltaCoalescer.append('reasoning_content', replay.append);
                   }
                 } else {
-                  const trimmed = trimContinuationOverlap(outputText, p.text);
-                  if (!trimmed) {
+                  const replay = resolveContinuationReplay(outputText, p.text);
+                  if (replay.dropped) {
+                    outputText = replay.kept;
+                    toolSieveState = createToolSieveState();
+                    replayEpoch += 1;
+                  }
+                  if (!replay.append) {
                     continue;
                   }
-                  if (searchEnabled && isCitation(trimmed)) {
+                  if (searchEnabled && isCitation(replay.append)) {
                     continue;
                   }
-                  outputText += trimmed;
+                  outputText += replay.append;
                   if (!toolSieveEnabled) {
-                    deltaCoalescer.append('content', trimmed);
+                    deltaCoalescer.append('content', replay.append);
                     continue;
                   }
-                  const events = processToolSieveChunk(toolSieveState, trimmed, toolNames);
+                  const events = processToolSieveChunk(toolSieveState, replay.append, toolNames);
                   for (const evt of events) {
                     if (evt.type === 'tool_call_deltas') {
                       if (!emitEarlyToolDeltas) {
@@ -368,8 +410,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
                       toolCallsEmitted = true;
                       toolCallsDoneEmitted = true;
                       deltaCoalescer.flush();
-                      sendDeltaFrame({ tool_calls: formatOpenAIStreamToolCalls(evt.calls, streamToolCallIDs, payload.tools) });
-                      resetStreamToolCallState(streamToolCallIDs, streamToolNames);
+                      emitToolCalls(evt.calls);
                       continue;
                     }
                     if (evt.text) {
@@ -513,6 +554,12 @@ async function handleVercelStream(req, res, rawBody, payload) {
 
 function toBool(v) {
   return v === true;
+}
+
+// toolCallSignature mirrors the Go helper used to recognise an echoed call.
+function toolCallSignature(call) {
+  const name = asString(call && call.name);
+  return `${name}\u0000${JSON.stringify((call && call.input) || {})}`;
 }
 
 function clonePayloadForEmptyOutputRetry(payload, parentMessageID) {
