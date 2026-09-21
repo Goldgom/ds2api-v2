@@ -191,6 +191,9 @@ async function handleVercelStream(req, res, rawBody, payload) {
     // dropped is an echo of that replay, not a new call.
     const emittedCallEpoch = new Map();
     let replayEpoch = 0;
+    // Set while the upstream is at a round boundary: the first content after the
+    // round-level lines may start a replay without tool-call markup.
+    let roundStartPending = true;
     const decoder = new TextDecoder();
     let buffered = '';
     let ended = false;
@@ -357,13 +360,22 @@ async function handleVercelStream(req, res, rawBody, payload) {
                 break;
               }
 
+              // The upstream opens every continue round with round-level lines
+              // (status, message ids, an empty envelope): the first content after
+              // them may start a replay without tool-call markup.
+              if (parsed.parts.length === 0) {
+                roundStartPending = true;
+                continue;
+              }
               for (const p of parsed.parts) {
                 if (!p.text) {
                   continue;
                 }
+                const permissive = Boolean(p.snapshot) || roundStartPending;
+                roundStartPending = false;
                 if (p.type === 'thinking') {
                   if (thinkingEnabled) {
-                    const replay = thinkingReplay.resolveChunk(thinkingText, p.text, Boolean(p.snapshot));
+                    const replay = thinkingReplay.resolveChunk(thinkingText, p.text, permissive);
                     if (replay.dropped) {
                       thinkingText = replay.kept;
                       toolSieveState = createToolSieveState();
@@ -376,7 +388,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
                     deltaCoalescer.append('reasoning_content', replay.append);
                   }
                 } else {
-                  const replay = outputReplay.resolveChunk(outputText, p.text, Boolean(p.snapshot));
+                  const replay = outputReplay.resolveChunk(outputText, p.text, permissive);
                   if (replay.dropped) {
                     outputText = replay.kept;
                     toolSieveState = createToolSieveState();

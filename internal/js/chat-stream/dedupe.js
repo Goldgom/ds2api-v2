@@ -50,7 +50,28 @@ const TOOL_MARKUP_HINTS = [
   '<parameter', '</parameter', 'parameter name', 'parameter|name',
 ];
 
-const MIN_REPLAY_CANDIDATE_LEN = 8;
+const MIN_REPRODUCED_TRUST_RUNES = 16;
+
+// sharedPrefixLen returns the length of the longest common prefix, rounded down
+// to a code point boundary of b.
+function sharedPrefixLen(a, b) {
+  const limit = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < limit && a[i] === b[i]) {
+    i += 1;
+  }
+  if (i > 0) {
+    const unit = b.charCodeAt(i - 1);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      i -= 1;
+    }
+  }
+  return i;
+}
+
+function runeCount(value) {
+  return Array.from(value).length;
+}
 
 function containsToolCallMarkup(text) {
   if (!text) {
@@ -65,10 +86,16 @@ function containsToolCallMarkup(text) {
 }
 
 // ReplayTracker drops continuation snapshot replays that arrive as many small
-// deltas, which resolveContinuationReplay cannot recognise on its own because
-// every fragment stays below the snapshot floor. The alignment is anchored on
-// the text accumulated before the replay started, so the replayed fragments can
-// be dropped whatever size they are delivered in.
+// parts, which resolveContinuationReplay cannot recognise on its own because
+// every fragment stays below the snapshot floor.
+//
+// The alignment is driven by the text itself: it tracks how much of the text
+// accumulated before the replay started the replay has reproduced, instead of
+// the byte position the previous part ended at. The transport re-chunks the
+// stream freely (a round boundary can merge the tail of the previous round with
+// the head of the replay), so aligning on part boundaries broke as soon as the
+// boundaries differed and every following part was appended again - the same
+// call was then emitted twice.
 class ReplayTracker {
   constructor() {
     this.reset();
@@ -76,9 +103,9 @@ class ReplayTracker {
 
   reset() {
     this.active = false;
-    this.confirmed = false;
+    this.trusted = false;
     this.base = 0;
-    this.offset = 0;
+    this.seen = 0;
   }
 
   resolve(existing, incoming) {
@@ -92,7 +119,10 @@ class ReplayTracker {
     return this.resolveChunk(existing, incoming, true);
   }
 
-  resolveChunk(existing, incoming, snapshot) {
+  // resolveChunk decides how much of incoming is new. permissive reports that
+  // incoming carries whole fragment content or opens a new upstream round, so a
+  // markup-free head may start a replay alignment.
+  resolveChunk(existing, incoming, permissive) {
     const current = typeof existing === 'string' ? existing : '';
     if (!incoming) {
       return { kept: current, append: '', dropped: false };
@@ -108,44 +138,65 @@ class ReplayTracker {
       }
     }
     const replay = resolveContinuationReplay(current, incoming);
-    this.openAlignment(current, incoming, replay, snapshot);
+    this.openAlignment(current, incoming, replay, permissive);
     return replay;
   }
 
   followReplay(existing, incoming) {
-    if (this.offset > existing.length) {
-      // The text was rewound below the aligned position.
+    if (this.base > existing.length) {
       this.reset();
       return null;
     }
-    const expected = existing.slice(this.offset);
-    const limit = Math.min(expected.length, incoming.length);
-    let matched = 0;
-    while (matched < limit && expected[matched] === incoming[matched]) {
-      matched += 1;
-    }
-    if (matched === incoming.length) {
-      this.offset += matched;
-      if (!this.confirmed) {
-        this.confirmed = true;
-        if (this.base < existing.length) {
-          // The chunk that opened the alignment was replayed content after all.
-          return { kept: existing.slice(0, this.base), append: '', dropped: true };
-        }
-      }
-      return { kept: existing, append: '', dropped: false };
-    }
-    if (this.confirmed && matched > 0) {
-      // The replayed fragment stopped matching. Only the matched prefix is known
-      // to be duplicated, so keep the accumulated text untouched and continue
-      // with the rest. Cutting the text here would destroy content that was only
-      // guessed to be a replay.
-      const replay = { kept: existing, append: incoming.slice(matched), dropped: false };
+    const known = existing.slice(0, this.base);
+    if (this.seen > known.length) {
       this.reset();
-      return replay;
+      return null;
     }
-    this.reset();
-    return null;
+    const available = known.slice(this.seen);
+
+    if (this.trusted) {
+      const matched = sharedPrefixLen(available, incoming);
+      if (matched === incoming.length && available.length > 0) {
+        this.seen += matched;
+        return { kept: existing, append: '', dropped: false };
+      }
+      // The part reproduced the rest of the accumulated text (the remainder is
+      // new) or stopped reproducing it: only the reproduced prefix is known to
+      // be duplicated.
+      const dropped = existing.length > known.length;
+      this.reset();
+      return { kept: known, append: incoming.slice(matched), dropped };
+    }
+
+    // Not trusted yet: the part is handled by the chunk-local rules exactly as
+    // if no alignment were open, so a false candidate cannot lose content.
+    const local = resolveContinuationReplay(existing, incoming);
+    if (available.length === 0) {
+      this.reset();
+      return local;
+    }
+    const matched = sharedPrefixLen(available, incoming);
+    if (matched === incoming.length) {
+      this.seen += matched;
+    } else if (matched === available.length && matched < incoming.length) {
+      this.seen = known.length;
+    } else {
+      this.reset();
+      return local;
+    }
+    if (runeCount(known.slice(0, this.seen)) < MIN_REPRODUCED_TRUST_RUNES) {
+      if (this.seen >= known.length) {
+        this.reset();
+      }
+      return local;
+    }
+    this.trusted = true;
+    const dropped = existing.length > known.length;
+    if (this.seen >= known.length) {
+      this.reset();
+      return { kept: known, append: incoming.slice(matched), dropped };
+    }
+    return { kept: known, append: '', dropped };
   }
 
   // The evidence is deliberately narrow, because both a missed replay and a
@@ -169,7 +220,7 @@ class ReplayTracker {
   //
   // A chunk that was appended verbatim stays appended until the next chunk
   // confirms the replay, so a false candidate costs nothing.
-  openAlignment(existing, incoming, replay, snapshot) {
+  openAlignment(existing, incoming, replay, permissive) {
     if (replay.dropped) {
       return;
     }
@@ -178,19 +229,16 @@ class ReplayTracker {
     if (!appendVerbatim && !droppedWhole) {
       return;
     }
-    if (incoming.length < MIN_REPLAY_CANDIDATE_LEN) {
-      return;
-    }
-    if (!snapshot && !containsToolCallMarkup(incoming)) {
+    if (!permissive && !containsToolCallMarkup(incoming)) {
       return;
     }
     if (!existing.startsWith(incoming)) {
       return;
     }
     this.active = true;
-    this.confirmed = false;
+    this.trusted = false;
     this.base = existing.length;
-    this.offset = incoming.length;
+    this.seen = incoming.length;
   }
 }
 

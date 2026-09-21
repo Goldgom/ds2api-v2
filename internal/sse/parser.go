@@ -20,6 +20,12 @@ type ContentPart struct {
 	// message that repeats the same markup) is new content, and treating it as a
 	// replay cuts the accumulated text apart.
 	Snapshot bool
+	// RoundStart marks the first content of a new upstream round. The upstream
+	// opens every `continue` round with round-level lines (status, message ids,
+	// an empty envelope), and a round that resends the message starts right after
+	// them - often with plain prose. A chunk that starts a round may therefore
+	// open a replay alignment without tool-call markup.
+	RoundStart bool
 }
 
 func ParseDeepSeekSSELine(raw []byte) (map[string]any, bool, bool) {

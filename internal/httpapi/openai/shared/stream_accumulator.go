@@ -49,7 +49,7 @@ type StreamAccumulatorResult struct {
 func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult {
 	out := StreamAccumulatorResult{}
 	for _, p := range parsed.ToolDetectionThinkingParts {
-		trimmed, replayed := a.detectReplay.ApplyToBuilder(&a.ToolDetectionThinking, p.Text, p.Snapshot)
+		trimmed, replayed := a.detectReplay.ApplyToBuilder(&a.ToolDetectionThinking, p.Text, sse.ReplayMayStartWithoutMarkup(p))
 		if replayed {
 			out.Replayed = true
 		}
@@ -59,7 +59,7 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 	}
 	for _, p := range parsed.Parts {
 		if p.Type == "thinking" {
-			delta := a.applyThinkingPart(p.Text, p.Snapshot)
+			delta := a.applyThinkingPart(p.Text, sse.ReplayMayStartWithoutMarkup(p))
 			if delta.Replayed {
 				out.Replayed = true
 			}
@@ -71,7 +71,7 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 			}
 			continue
 		}
-		delta := a.applyTextPart(p.Text, p.Snapshot)
+		delta := a.applyTextPart(p.Text, sse.ReplayMayStartWithoutMarkup(p))
 		if delta.Replayed {
 			out.Replayed = true
 		}
@@ -85,8 +85,8 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 	return out
 }
 
-func (a *StreamAccumulator) applyThinkingPart(text string, snapshot bool) StreamPartDelta {
-	replay := a.rawThinkingReplay.ResolveChunk(a.RawThinking.String(), text, snapshot)
+func (a *StreamAccumulator) applyThinkingPart(text string, permissive bool) StreamPartDelta {
+	replay := a.rawThinkingReplay.ResolveChunk(a.RawThinking.String(), text, permissive)
 	if replay.Dropped {
 		a.RawThinking.Reset()
 		a.RawThinking.WriteString(replay.Kept)
@@ -106,7 +106,7 @@ func (a *StreamAccumulator) applyThinkingPart(text string, snapshot bool) Stream
 	if cleanedText == "" {
 		return delta
 	}
-	visible := a.thinkingReplay.ResolveChunk(a.Thinking.String(), cleanedText, snapshot)
+	visible := a.thinkingReplay.ResolveChunk(a.Thinking.String(), cleanedText, permissive)
 	if visible.Append == "" {
 		return delta
 	}
@@ -115,8 +115,8 @@ func (a *StreamAccumulator) applyThinkingPart(text string, snapshot bool) Stream
 	return delta
 }
 
-func (a *StreamAccumulator) applyTextPart(text string, snapshot bool) StreamPartDelta {
-	replay := a.rawTextReplay.ResolveChunk(a.RawText.String(), text, snapshot)
+func (a *StreamAccumulator) applyTextPart(text string, permissive bool) StreamPartDelta {
+	replay := a.rawTextReplay.ResolveChunk(a.RawText.String(), text, permissive)
 	if replay.Dropped {
 		a.RawText.Reset()
 		a.RawText.WriteString(replay.Kept)
@@ -134,7 +134,7 @@ func (a *StreamAccumulator) applyTextPart(text string, snapshot bool) StreamPart
 		return delta
 	}
 	cleanedText := CleanVisibleOutput(replay.Append, a.StripReferenceMarkers)
-	visible := a.textReplay.ResolveChunk(a.Text.String(), cleanedText, snapshot)
+	visible := a.textReplay.ResolveChunk(a.Text.String(), cleanedText, permissive)
 	if visible.Append == "" {
 		return delta
 	}

@@ -1152,3 +1152,40 @@ test('ReplayTracker keeps plain deltas that merely repeat the message head', () 
   }
   assert.equal(accumulated, '字'.repeat(640));
 });
+
+// A continue round may split the resend differently than the original delivery
+// (the round boundary can even merge the previous round's tail with the replay
+// head), so the alignment has to match text rather than part boundaries.
+test('ReplayTracker aligns a replay that is split differently', () => {
+  let message = '<|EPSE|tool_calls>';
+  for (let i = 1; i <= 5; i += 1) {
+    message += `<|EPSE|invoke name="bash"><|EPSE|parameter name="command"><![CDATA[echo "TC${i}-$(date +%s%N)"]]></|EPSE|parameter></|EPSE|invoke>`;
+  }
+  message += '</|EPSE|tool_calls>';
+  const slice = (size) => {
+    const out = [];
+    for (let i = 0; i < message.length; i += size) {
+      out.push(message.slice(i, i + size));
+    }
+    return out;
+  };
+
+  const tracker = new ReplayTracker();
+  let accumulated = '';
+  for (const chunk of slice(24)) {
+    const replay = tracker.resolve(accumulated, chunk);
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(accumulated, message);
+
+  let rewound = false;
+  slice(7).forEach((chunk, index) => {
+    const replay = tracker.resolveChunk(accumulated, chunk, index === 0);
+    if (replay.dropped) {
+      rewound = true;
+    }
+    accumulated = replay.kept + replay.append;
+  });
+  assert.equal(rewound, true, 'expected the token-sized replay to be recognised');
+  assert.equal(accumulated, message, 'the replay must not be appended again');
+});

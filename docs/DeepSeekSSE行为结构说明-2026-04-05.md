@@ -332,8 +332,9 @@ parse SSE block
 
 1. 每条流开头与每个 `continue` 轮次开头都会出现一个完整 `response` envelope（`fragments` 里带着当时的完整 `content`）。它与上一轮已经收到的正文高度重合，直接追加就会把整条消息（包括其中的 EPSE 工具块）复制一份，工具调用因此会被解析成第二个调用。
 2. 轮次切换时，上一轮尾部尚未下发的无路径增量会和下一个快照落在同一个 `data:` 序列里，而本项目的行泵还会按 `MinChars` / `MaxWait` 把相邻增量合并成一块——如果不管，重放就会出现在**块的内部偏移**上。因此行泵现在把这种**整消息快照单独成块**：解析层给 envelope 片段打标（`sse.ContentPart.Snapshot`），行泵遇到快照先冲刷已缓冲的增量、再把快照单独冲刷，消费方不需要再去猜“重放是否从块内某个偏移开始”。
-3. 有的账号/轮次不会一次性重发整条快照，而是把重放内容重新按 token 逐段下发；也有的会**按片段重发整条消息**——每个片段一块（`{"v":{"response":{"fragments":[单个片段]}}}` 或 `p=response/fragments, o=APPEND` 的单片段批次），而重启消息的那一块往往只是正文片段。这些块每个都短于 32 字（或者不是整条消息），单块规则看不到任何快照特征，必须按"对齐已累积文本"的方式识别（见下条）。
-4. 正因为重放可能是**一块=一个片段**，解析层把「整片段内容」与「增量」分开标记（Go `sse.ContentPart.Snapshot`，Node `snapshot: true`）：整片段 part 可以开重放对齐而不需要含工具标记，普通增量则必须含工具标记。若不做这个区分，重启消息的正文片段无法开对齐，后续带着工具调用的片段会被全部重新追加，客户端就会把同一批调用收到两遍（回归用例 `TestToolCallPerFragmentReplayEmitsEachCallOnce`）。
+3. 有的账号/轮次不会一次性重发整条快照，而是把重放内容重新按 token 逐段下发；也有的会**按片段重发整条消息**——每个片段一块（`{"v":{"response":{"fragments":[单个片段]}}}` 或 `p=response/fragments, o=APPEND` 的单片段批次），而重启消息的那一块往往只是正文片段，甚至可能是**纯工具调用消息**（整条消息都是工具标记，逐 token 下发时长 1～3 字）。这些块每个都短于 32 字（或者不是整条消息），单块规则看不到任何快照特征，必须按"对齐已累积文本"的方式识别（见下条）。
+4. 正因为重放可能是**一块=一个片段**或**逐 token**，解析层把「整片段内容」与「增量」分开标记（Go `sse.ContentPart.Snapshot`，Node `snapshot: true`），行泵另外把上游每个轮次开头的轮次级行（`response/status`、`request_message_id`/`response_message_id`、空信封）识别为**轮次边界**（Go `sse.ContentPart.RoundStart`，Node `roundStartPending`）：遇到它先冲刷缓冲区、再顺手把标记打在下一条正文 part 上。整片段 part 或轮次起始 part 可以开重放对齐而不需要含工具标记，普通增量则必须含工具标记。若不做这个区分，重启消息的正文片段无法开对齐，后续带着工具调用的片段会被全部重新追加，客户端就会把同一批调用收到两遍（回归用例 `TestToolCallPerFragmentReplayEmitsEachCallOnce`、`TestToolCallTokenSizedReplayOfPureToolCallsEmitsEachCallOnce`）。
+5. 对齐本身必须**按文本比较**（“这个 part 重 pro duce 出已累积文本的哪一段”），不能按 part 边界或“上一个 part 结束的偏移”：行泵会自由重新分块，且轮次边界可能把上一轮尾部与重放头部合并进同一块。按分块位置对齐一旦边界不同就断，后续 part 会被重新追加（这正是同一批调用被发射两遍的另一种成因）。
 
 按消息累积处理时的判定与后果见 [`docs/toolcall-semantics.md`](./toolcall-semantics.md) 第 7 节；对应实现为 `internal/sse/dedupe.go`（Go）与 `internal/js/chat-stream/dedupe.js`（Node）。检查上游是否真的在重放时，先看原始 SSE 里同一段内容是否在轮次边界被再次下发，而不必先怀疑 sieve 或 emitter。
 

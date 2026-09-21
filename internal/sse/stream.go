@@ -59,6 +59,11 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 		// ordinary delta.
 		var textPendingSnapshot bool
 		var thinkingPendingSnapshot bool
+		// roundStartPending is set by the round-level lines the upstream sends when
+		// it opens a new round (status, message ids, an empty envelope). It is
+		// reported on the first content part of that round, so a replay that starts
+		// with plain prose can be recognised without guessing from the text.
+		roundStartPending := true
 		var anyFlushed bool
 		var pendingResponseMessageID int
 
@@ -155,15 +160,17 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 			var parts []ContentPart
 
 			if thinkingChars > 0 {
-				parts = append(parts, ContentPart{Text: thinkingBuffer.String(), Type: thinkingPendingType, Snapshot: thinkingPendingSnapshot})
+				parts = append(parts, ContentPart{Text: thinkingBuffer.String(), Type: thinkingPendingType, Snapshot: thinkingPendingSnapshot, RoundStart: roundStartPending})
 				thinkingBuffer.Reset()
 				thinkingPendingSnapshot = false
+				roundStartPending = false
 			}
 
 			if textChars > 0 {
-				parts = append(parts, ContentPart{Text: textBuffer.String(), Type: textPendingType, Snapshot: textPendingSnapshot})
+				parts = append(parts, ContentPart{Text: textBuffer.String(), Type: textPendingType, Snapshot: textPendingSnapshot, RoundStart: roundStartPending})
 				textBuffer.Reset()
 				textPendingSnapshot = false
+				roundStartPending = false
 			}
 
 			if len(parts) > 0 || toolDetectionThinkingBuffer.Len() > 0 {
@@ -262,6 +269,17 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 			}
 
 			if cfg.Enabled {
+				if len(result.Parts) == 0 && len(result.ToolDetectionThinkingParts) == 0 {
+					// A round-level line: the upstream is opening a new round. Emit what
+					// is buffered so that the round (and any replay of the message it
+					// sends) starts on a fresh part instead of being merged with the
+					// tail of the previous one.
+					if hasBufferedData() {
+						flushBuffer(true)
+					}
+					roundStartPending = true
+					return true
+				}
 				for _, p := range result.ToolDetectionThinkingParts {
 					toolDetectionThinkingBuffer.WriteString(p.Text)
 				}

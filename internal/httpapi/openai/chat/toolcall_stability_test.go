@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -274,6 +275,48 @@ func TestToolCallPerFragmentReplayEmitsEachCallOnce(t *testing.T) {
 			}
 			if reason := streamFinishReason(mustFrames(t, body)); reason != "tool_calls" {
 				t.Fatalf("expected finish_reason=tool_calls, got %q body=%s", reason, body)
+			}
+		})
+	}
+}
+
+// A pure tool-call message carries no prose, and DeepSeek streams it token by
+// token. A continue round that resends it token by token therefore produces
+// parts of one to three runes; the replay must still be recognised, otherwise
+// every call in it is emitted a second time. The upstream always opens the round
+// with round-level lines (status, message ids), which is what makes the replay
+// head recognisable.
+func TestToolCallTokenSizedReplayOfPureToolCallsEmitsEachCallOnce(t *testing.T) {
+	wrapper := "<|EPSE|tool_calls>"
+	for i := 1; i <= 5; i++ {
+		marker := "TC" + string(rune('0'+i))
+		wrapper += `<|EPSE|invoke name="bash"><|EPSE|parameter name="command"><![CDATA[echo "` + marker + `-$(date +%s%N)"]]></|EPSE|parameter></|EPSE|invoke>`
+	}
+	wrapper += "</|EPSE|tool_calls>"
+
+	for _, size := range []int{1, 2, 3, 16, 24} {
+		t.Run(fmt.Sprintf("chunk-%d", size), func(t *testing.T) {
+			lines := make([]string, 0, 512)
+			for _, chunk := range replayRunes(wrapper, size) {
+				lines = append(lines, replayContentLine(t, chunk))
+			}
+			// The upstream opens the continue round with round-level lines.
+			lines = append(lines,
+				`data: {"request_message_id":1,"response_message_id":2,"model_type":"default"}`,
+				`data: {"p":"response/status","v":"WIP"}`,
+			)
+			for _, chunk := range replayRunes(wrapper, size) {
+				lines = append(lines, replayContentLine(t, chunk))
+			}
+
+			body := runReplayStream(t, []string{"bash"}, lines...)
+			calls := streamedToolCalls(t, body)
+			if len(calls) != 5 {
+				t.Fatalf("expected 5 tool calls, got %d body=%s", len(calls), body)
+			}
+			content := streamedDeltaContent(t, body)
+			if strings.Contains(content, "CDATA[echo") {
+				t.Fatalf("tool markup leaked into the visible content: %q", content)
 			}
 		})
 	}

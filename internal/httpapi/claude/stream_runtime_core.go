@@ -110,7 +110,7 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 
 	contentSeen := false
 	for _, p := range parsed.ToolDetectionThinkingParts {
-		trimmed, _ := s.detectReplay.ApplyToBuilder(&s.toolDetectionThinking, p.Text, p.Snapshot)
+		trimmed, _ := s.detectReplay.ApplyToBuilder(&s.toolDetectionThinking, p.Text, sse.ReplayMayStartWithoutMarkup(p))
 		if trimmed != "" {
 			s.toolDetectionThinking.WriteString(trimmed)
 		}
@@ -118,10 +118,10 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 	for _, p := range parsed.Parts {
 		var rawTrimmed string
 		if p.Type == "thinking" {
-			rawTrimmed, _ = s.rawThinkingReplay.ApplyToBuilder(&s.rawThinking, p.Text, p.Snapshot)
+			rawTrimmed, _ = s.rawThinkingReplay.ApplyToBuilder(&s.rawThinking, p.Text, sse.ReplayMayStartWithoutMarkup(p))
 		} else {
 			var rewound bool
-			rawTrimmed, rewound = s.rawTextReplay.ApplyToBuilder(&s.rawText, p.Text, p.Snapshot)
+			rawTrimmed, rewound = s.rawTextReplay.ApplyToBuilder(&s.rawText, p.Text, sse.ReplayMayStartWithoutMarkup(p))
 			if rewound {
 				// The upstream replayed a snapshot that diverged from the
 				// accumulated text, so the stale tail was dropped. Sieve state
