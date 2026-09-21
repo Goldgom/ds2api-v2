@@ -471,6 +471,7 @@ Parameters: ...
 - expert 模式提示词分段（`expert_prompt_segment`）触发条件、切分算法或续发逻辑变更
 - 旧 `history_split` 字段忽略/清理行为变更
 - completion payload 字段语义变更
+- Responses 流式工具调用的 item 身份（`item.id` / `call_id` / `output_index` 在流式事件与 `response.completed` 之间必须一致、每调用只宣告一次）变更
 - Claude / Gemini 对这套统一语义的复用关系变更
 
 优先检查这些文件：

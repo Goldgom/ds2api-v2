@@ -415,6 +415,7 @@ DS2API_DEBUG_TOOLCALL=1 \
 - `request_start`：请求 id（`req`）、模型、**提示词指纹**（`promptHash` / `promptLen`）、**同一提示词同时在跑的流数**（`samePromptInFlight`）、**全进程同时在跑的流数**（`concurrentStreams`）、thinking/search 开关、工具数量、是否要求必须调用工具
 - `part`：上游每个 part（`req` / `snapshot` / `roundStart` / 长度 / 哈希 / `invoke` 计数 / 与已累积文本的 `prefixMatch` 与 `interiorOffset` / 实际 `appendLen` / 是否 `dropped`）
 - `call_emitted` / `call_echo_skipped`：实际下发的调用（`req`、名称、参数哈希、`indexBase`、`replayEpoch`）
+- `call_added` / `call_done` / `call_echo_skipped`：Responses 面（`surface=responses`）宣告与收尾的每个 `function_call`（`req`、名称、`sigHash`、`itemHash`、`outputID`、当前调用总数）
 - `finalize`：`req`、`promptHash`、累计文本长度/哈希/`invoke` 与 wrapper 计数、可见正文长度、从正文解析出的调用数、已下发调用数、`finish_reason`
 - `stream_end`：`req` 的流结束标记（含累计长度、已下发调用数、`replayEpoch`）
 

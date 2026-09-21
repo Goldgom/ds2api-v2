@@ -162,11 +162,12 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 
 ### 7.3 现场排查开关（`DS2API_DEBUG_TOOLCALL`）
 
-客户端报告「同一调用出现多次」时，不用先抓包：设 `DS2API_DEBUG_TOOLCALL=1`（或给文件/目录路径 / `stdout`）后重启，复现一次即可得到 `logs/toolcall-debug.jsonl`。它记录每轮的 `request_start`（含请求 id `req`、提示词指纹 `promptHash`/`promptLen`、同一提示词在跑的流数 `samePromptInFlight`、全进程在跑的流数 `concurrentStreams`）、每个 part 的 `req`/`snapshot`/`roundStart`/长度/哈希/`invoke` 计数/`prefixMatch`/`interiorOffset`/`appendLen`/`dropped`、每次 `call_emitted`/`call_echo_skipped`、`finalize` 汇总（`req`、`promptHash`、累计文本长度/哈希、`invoke` 与 wrapper 计数、从正文解析出的调用数、已下发调用数、`finish_reason`）以及 `stream_end` 结束标记。
+客户端报告「同一调用出现多次」时，不用先抓包：设 `DS2API_DEBUG_TOOLCALL=1`（或给文件/目录路径 / `stdout`）后重启，复现一次即可得到 `logs/toolcall-debug.jsonl`。它记录每轮的 `request_start`（含 `surface`、请求 id `req`、提示词指纹 `promptHash`/`promptLen`、同一提示词在跑的流数 `samePromptInFlight`、全进程在跑的流数 `concurrentStreams`）、每个 part 的 `req`/`snapshot`/`roundStart`/长度/哈希/`invoke` 计数/`prefixMatch`/`interiorOffset`/`appendLen`/`dropped`、每次 `call_emitted`/`call_echo_skipped`、Responses 面的每次 `call_added`/`call_done`（含 `sigHash`/`itemHash`/`outputID`/`callCount`）、`finalize` 汇总（`req`、`promptHash`、累计文本长度/哈希、`invoke` 与 wrapper 计数、从正文解析出的调用数、已下发调用数、`finish_reason`）以及 `stream_end` 结束标记。
 
 判读：
 
 - **先分请求再分文本**：所有 `line`/`part` 记录都带 `req`。同一个 `req` 内出现两套交替的长度序列 → 上游流被这一条请求消费了两次；两套序列分属不同 `req`，且两者 `promptHash` 相同、`samePromptInFlight >= 2`（或 `concurrentStreams >= 2`）→ **客户端把同一轮并发发了两次**，服务端每条响应都正确，重复是客户端合并出来的（服务端无法也不该跨请求去重）。
+- **Responses 面看宣告次数**：同一个 `req` 下一次工具调用应当只有一条 `call_added`（`sigHash` 相同）；出现两条说明宣告重复，去比对 `outputID`/`itemHash` 与最终 `response.completed` 里的 id 是否一致（参见 7.4）。
 - `finalize.rawInvocations` = 我们**累积到的文本**里有几个调用。等于期望值 → 重复不是文本层的，去看客户端的 `id`/`index` 是否相同；
 - 若为两倍，再看 `part` 记录：存在 `appendLen > 0` 且（`prefixMatch > 0` 或 `interiorOffset >= 0`）→ **重放没被识别而重复追加**（服务端缺陷，按该 part 的形状补去重）；
 - 若为两倍但没有任何 part 与已累积文本重合 → **上游/模型自己把同一段写了两遍**，属于如实透传，需要单独决定是否要按“同一 wrapper 内逐字节完全相同”丢弃。
@@ -191,4 +192,21 @@ go test -v -run 'TestTrackCountsOverlappingStreams' ./internal/toolcalldebug/
 #   含 TestToolCallTokenSizedReplayOfPureToolCallsEmitsEachCallOnce（逐 token 重放纯工具消息，同样只能发射一次）
 go test -v -run 'TestToolCallShapes|TestToolCallStabilityRisks|TestToolCallUnparseableMarkupStaysVisible|TestToolCallTruncatedMarkupStaysVisible|TestToolCallDegradedMarkupIsRepaired|TestToolCallPerFragmentReplayEmitsEachCallOnce|TestToolCallTokenSizedReplayOfPureToolCallsEmitsEachCallOnce|TestHandleStreamReplayedToolCallBlockEmitsOneCall|TestHandleStreamTokenSizedReplayEmitsSingleToolCall|TestHandleStreamContinueRoundsDoNotDuplicateToolCalls|TestHandleStreamDivergedReplayKeepsEveryCallValid|TestHandleStreamKeepsIntentionallyRepeatedIdenticalCalls|TestHandleStreamSimilarToolCallsKeepTheirOwnArguments' ./internal/httpapi/openai/chat/
 node --test tests/node/chat-stream.test.js
+```
+
+### 7.4 Responses 面的调用身份（重复宣告排查）
+
+Responses 面（`POST /v1/responses`）的客户端通常同时消费流式 item 事件和最终 `response.completed`，所以同一个工具调用必须在两处用 **同一个** `item.id` / `call_id` / `output_index` 出现，且只宣告一次。历史上两者各自按“本批次下标”生成 id，且每批结束后会清空下标状态，于是同一次调用在流式事件里拿到 id A、在 `response.completed` 里拿到 id B：客户端把两个 id 都当成新调用，表现为“同一调用重复一次、id 不同、时间只差几毫秒”。
+
+现在的规则：
+
+- 每个调用实例（`responsesFunctionCall`）在第一次可见时分配一次 id，之后流式 delta/done 和 `response.completed` 都复用它；
+- 每轮结束只清掉“本轮下标 → 调用实例”的映射（上游下一轮会重新从 0 编号），调用实例与 id 保留；
+- 上游回放快照被丢弃时 `replayEpoch++`，同一 name+arguments 的调用于是只作为回声被跳过（`call_echo_skipped`）；同一正文里模型真的重复写了同一个调用，两次都在同一批次里出现，都会宣告；
+- 最终 `response.completed` 的调用列表与已宣告实例按 name（再按 arguments）对齐：已宣告过的复用 id，从未宣告过的（例如收尾才解析出来的）才补新实例。
+
+对应回归测试：
+
+```bash
+go test -v -run 'TestHandleResponsesStreamEmitsEachToolCallOnce|TestHandleResponsesStreamToolCallIDsMatchCompletedObject|TestHandleResponsesStreamDropsReplayedToolCallRound' ./internal/httpapi/openai/responses/
 ```

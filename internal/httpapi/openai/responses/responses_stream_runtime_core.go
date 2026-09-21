@@ -45,13 +45,19 @@ type responsesStreamRuntime struct {
 	visibleText       strings.Builder
 	responseMessageID int
 	upstreamErr       string
-	streamToolCallIDs map[int]string
-	functionItemIDs   map[int]string
-	functionOutputIDs map[int]int
-	functionArgs      map[int]string
-	functionDone      map[int]bool
-	functionAdded     map[int]bool
-	functionNames     map[int]string
+
+	// functionCalls holds one entry per tool call the client was told about, in
+	// the order it was told, and functionRound maps the index inside the current
+	// upstream round to that entry. Keeping the ids on the call instead of on the
+	// round index is what keeps the streamed output_item events and the
+	// response.completed object describing the same call with the same ids: a
+	// client that reads both must not see one call twice.
+	functionCalls []*responsesFunctionCall
+	functionRound map[int]*responsesFunctionCall
+	// emittedCallEpoch records the replay epoch a call was emitted in, so a call
+	// that reappears after a dropped snapshot replay is skipped as an echo.
+	emittedCallEpoch  map[string]uint64
+	replayEpoch       uint64
 	messageItemID     string
 	messageOutputID   int
 	nextOutputID      int
@@ -100,13 +106,8 @@ func newResponsesStreamRuntime(
 		toolsRaw:              toolsRaw,
 		bufferToolContent:     bufferToolContent,
 		emitEarlyToolDeltas:   emitEarlyToolDeltas,
-		streamToolCallIDs:     map[int]string{},
-		functionItemIDs:       map[int]string{},
-		functionOutputIDs:     map[int]int{},
-		functionArgs:          map[int]string{},
-		functionDone:          map[int]bool{},
-		functionAdded:         map[int]bool{},
-		functionNames:         map[int]string{},
+		functionRound:         map[int]*responsesFunctionCall{},
+		emittedCallEpoch:      map[string]uint64{},
 		messageOutputID:       -1,
 		toolChoice:            toolChoice,
 		traceID:               traceID,
@@ -123,15 +124,18 @@ func newResponsesStreamRuntime(
 		// The shared accumulator traces responses-surface streams too; without
 		// this marker a part record could not be attributed to a surface.
 		toolcalldebug.Log("request_start", map[string]any{
-			"req":                responseID,
-			"surface":            "responses",
-			"model":              model,
-			"promptHash":         toolcalldebug.Hash(finalPrompt),
-			"promptLen":          len(finalPrompt),
-			"traceID":            traceID,
-			"toolNames":          len(toolNames),
-			"toolsRawPresent":    toolsRaw != nil,
-			"toolChoiceRequired": toolChoice.IsRequired(),
+			"req":                 responseID,
+			"surface":             "responses",
+			"model":               model,
+			"promptHash":          toolcalldebug.Hash(finalPrompt),
+			"promptLen":           len(finalPrompt),
+			"traceID":             traceID,
+			"thinkingEnabled":     thinkingEnabled,
+			"bufferToolContent":   bufferToolContent,
+			"emitEarlyToolDeltas": emitEarlyToolDeltas,
+			"toolNames":           len(toolNames),
+			"toolsRawPresent":     toolsRaw != nil,
+			"toolChoiceRequired":  toolChoice.IsRequired(),
 		})
 	}
 	return runtime
@@ -295,8 +299,10 @@ func (s *responsesStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Pa
 	if accumulated.Replayed {
 		// The upstream replayed a snapshot that diverged from the accumulated
 		// text, so the accumulator dropped the stale tail. Sieve state derived
-		// from that tail must be dropped with it.
+		// from that tail must be dropped with it, and the calls that were already
+		// emitted before this point are echoes from now on.
 		s.sieve = toolstream.State{}
+		s.replayEpoch++
 	}
 	for _, p := range accumulated.Parts {
 		if p.Type == "thinking" {

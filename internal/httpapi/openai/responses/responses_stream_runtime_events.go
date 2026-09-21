@@ -53,7 +53,7 @@ func (s *responsesStreamRuntime) processToolStreamEvents(events []toolstream.Eve
 			if !s.emitEarlyToolDeltas {
 				continue
 			}
-			filtered := filterIncrementalToolCallDeltasByAllowed(evt.ToolCallDeltas, s.functionNames)
+			filtered := filterIncrementalToolCallDeltasByAllowed(evt.ToolCallDeltas, s.functionNamesByIndex())
 			if len(filtered) == 0 {
 				continue
 			}

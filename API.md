@@ -416,6 +416,8 @@ data: [DONE]
 
 流式场景下若 `tool_choice=required` 违规，会返回 `response.failed` 后结束（不再发送 `response.completed`）。
 
+**工具调用身份约定（必守）**：每个工具调用只宣告一次，且 `response.output_item.added` / `response.function_call_arguments.done` / `response.output_item.done` 与 `response.completed` 里的 `item.id`、`call_id`、`output_index` 必须完全一致。客户端常同时消费流式 item 事件与最终 `response.completed`，两边 id 不一致会让它把同一个调用当成两个（表现为“同一调用重复一次、id 不同、时间只差几毫秒”）。上游回放轮次被去重后不会重新宣告；同一正文里模型真的写了两次相同调用时，两次都会宣告。
+
 > 当前版本说明：解析层默认“尽量提取结构化 tool call”，未启用基于 `tools` allow-list 的硬拒绝；是否执行仍应由你的工具执行器做白名单校验。
 
 ### `GET /v1/responses/{response_id}`

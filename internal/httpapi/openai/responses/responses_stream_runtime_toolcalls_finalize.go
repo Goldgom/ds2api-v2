@@ -2,57 +2,46 @@ package responses
 
 import (
 	"ds2api/internal/toolcall"
-	"encoding/json"
 	"sort"
 	"strings"
 
 	openaifmt "ds2api/internal/format/openai"
 )
 
+// closeIncompleteFunctionItems finishes the calls the client was already told
+// about but that never received their arguments. Every event it sends reuses the
+// ids of the announced call.
 func (s *responsesStreamRuntime) closeIncompleteFunctionItems() {
-	if len(s.functionAdded) == 0 {
-		return
-	}
-	indices := make([]int, 0, len(s.functionAdded))
-	for idx, added := range s.functionAdded {
-		if !added || s.functionDone[idx] {
+	for _, call := range s.functionCalls {
+		if !call.added || call.done {
 			continue
 		}
-		indices = append(indices, idx)
-	}
-	if len(indices) == 0 {
-		return
-	}
-	sort.Ints(indices)
-	for _, idx := range indices {
-		name := strings.TrimSpace(s.functionNames[idx])
+		name := strings.TrimSpace(call.name)
 		if name == "" {
 			continue
 		}
-		args := strings.TrimSpace(s.functionArgs[idx])
+		args := strings.TrimSpace(call.args)
 		if args == "" {
 			args = "{}"
 		}
-		outputIndex := s.ensureFunctionOutputIndex(idx)
-		itemID := s.ensureFunctionItemID(idx)
-		callID := s.ensureToolCallID(idx)
+		call.args = args
 		s.sendEvent(
 			"response.function_call_arguments.done",
-			openaifmt.BuildResponsesFunctionCallArgumentsDonePayload(s.responseID, itemID, outputIndex, callID, name, args),
+			openaifmt.BuildResponsesFunctionCallArgumentsDonePayload(s.responseID, call.itemID, call.outputID, call.callID, name, args),
 		)
 		item := map[string]any{
-			"id":        itemID,
+			"id":        call.itemID,
 			"type":      "function_call",
-			"call_id":   callID,
+			"call_id":   call.callID,
 			"name":      name,
 			"arguments": args,
 			"status":    "completed",
 		}
 		s.sendEvent(
 			"response.output_item.done",
-			openaifmt.BuildResponsesOutputItemDonePayload(s.responseID, itemID, outputIndex, item),
+			openaifmt.BuildResponsesOutputItemDonePayload(s.responseID, call.itemID, call.outputID, item),
 		)
-		s.functionDone[idx] = true
+		call.done = true
 		s.toolCallsDoneEmitted = true
 	}
 }
@@ -63,6 +52,12 @@ func (s *responsesStreamRuntime) buildCompletedResponseObject(finalThinking, fin
 		item  map[string]any
 	}
 	indexed := make([]indexedItem, 0, len(calls)+1)
+
+	if len(calls) > 0 {
+		// Reserve the message slot before the calls so a call that was streamed
+		// earlier does not push the message item behind it in the output order.
+		s.ensureMessageOutputIndex()
+	}
 
 	if s.messageAdded {
 		text := s.visibleText.String()
@@ -126,19 +121,15 @@ func (s *responsesStreamRuntime) buildCompletedResponseObject(finalThinking, fin
 	}
 
 	normalizedCalls := toolcall.NormalizeParsedToolCallsForSchemas(calls, s.toolsRaw)
-	for idx, tc := range normalizedCalls {
-		if strings.TrimSpace(tc.Name) == "" {
-			continue
-		}
-		argsBytes, _ := json.Marshal(tc.Input)
+	for _, call := range s.finalFunctionCalls(normalizedCalls) {
 		indexed = append(indexed, indexedItem{
-			index: s.ensureFunctionOutputIndex(idx),
+			index: call.outputID,
 			item: map[string]any{
-				"id":        s.ensureFunctionItemID(idx),
+				"id":        call.itemID,
 				"type":      "function_call",
-				"call_id":   s.ensureToolCallID(idx),
-				"name":      tc.Name,
-				"arguments": string(argsBytes),
+				"call_id":   call.callID,
+				"name":      call.name,
+				"arguments": call.args,
 				"status":    "completed",
 			},
 		})
