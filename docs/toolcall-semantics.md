@@ -160,6 +160,16 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 
 可见正文只剥离**已经成功解析成工具调用**的整块包装（`stripLeakedToolCallWrapperBlocks` 内先用 `ParseStandaloneToolCallsDetailed` 验证）。解析不出来的包装（例如 `invoke` 缺闭合标签）必须原样保留：sieve 本来就会把它当普通正文下发，可见层再删掉它，客户端就会拿到空正文且没有任何调用，handler 随后按“上游无输出”返回 503。
 
+### 7.3 现场排查开关（`DS2API_DEBUG_TOOLCALL`）
+
+客户端报告「同一调用出现多次」时，不用先抓包：设 `DS2API_DEBUG_TOOLCALL=1`（或给文件/目录路径 / `stdout`）后重启，复现一次即可得到 `logs/toolcall-debug.jsonl`。它记录每轮的 `request_start`、每个 part 的 `snapshot`/`roundStart`/长度/哈希/`invoke` 计数/`prefixMatch`/`interiorOffset`/`appendLen`/`dropped`、每次 `call_emitted`/`call_echo_skipped`，以及 `finalize` 汇总（累计文本长度/哈希、`invoke` 与 wrapper 计数、从正文解析出的调用数、已下发调用数、`finish_reason`）。
+
+判读：
+
+- `finalize.rawInvocations` = 我们**累积到的文本**里有几个调用。等于期望值 → 重复不是文本层的，去看客户端的 `id`/`index` 是否相同；
+- 若为两倍，再看 `part` 记录：存在 `appendLen > 0` 且（`prefixMatch > 0` 或 `interiorOffset >= 0`）→ **重放没被识别而重复追加**（服务端缺陷，按该 part 的形状补去重）；
+- 若为两倍但没有任何 part 与已累积文本重合 → **上游/模型自己把同一段写了两遍**，属于如实透传，需要单独决定是否要按“同一 wrapper 内逐字节完全相同”丢弃。
+
 对应的回归测试：
 
 ```bash

@@ -299,6 +299,7 @@ VERCEL_TEAM_ID=team_xxxxxxxxxxxx   # optional for personal accounts
 | `DS2API_VERCEL_INTERNAL_SECRET` | Hybrid streaming internal auth | Falls back to `DS2API_ADMIN_KEY` |
 | `DS2API_VERCEL_STREAM_LEASE_TTL_SECONDS` | Stream lease TTL | `900` |
 | `DS2API_RAW_STREAM_SAMPLE_ROOT` | Raw stream sample root for saving/reading samples | `tests/raw_stream_samples` |
+| `DS2API_DEBUG_TOOLCALL` | Tool-call pipeline trace (`1/true` writes `logs/toolcall-debug.jsonl`, a file/directory path, or `stdout`) | off |
 | `DS2API_STATIC_ADMIN_DIR` | WebUI static asset directory | `static/admin` |
 | `DS2API_AUTO_BUILD_WEBUI` | Whether local startup auto-builds missing WebUI assets (`1/true/yes/on` or `0/false/no/off`) | Enabled outside Vercel |
 | `VERCEL_TOKEN` | Vercel sync token | — |

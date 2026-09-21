@@ -399,6 +399,26 @@ go run ./cmd/ds2api
 - `response_body`：上游返回的原始流式内容拼接文本
 - `response_truncated`：是否触发单条大小截断
 
+### 工具调用流水追踪（重复/错位排查）
+
+当客户端报告「同一个工具调用出现多次」「参数串号」时，用这个开关把**每一轮的服务端处理过程**记成 JSONL（默认关闭，开启后每个事件只做一次原子判断）：
+
+```bash
+DS2API_DEBUG_TOOLCALL=1 \
+  go run ./cmd/ds2api        # -> logs/toolcall-debug.jsonl
+# 也可以：DS2API_DEBUG_TOOLCALL=/var/log/ds2api-toolcall.jsonl
+# 或者： DS2API_DEBUG_TOOLCALL=stdout
+```
+
+追踪里记录（不保存正文，只有长度/短哈希/计数/限量预览）：
+
+- `request_start`：模型、thinking/search 开关、工具数量、是否要求必须调用工具
+- `part`：上游每个 part（`snapshot` / `roundStart` / 长度 / 哈希 / `invoke` 计数 / 与已累积文本的 `prefixMatch` 与 `interiorOffset` / 实际 `appendLen` / 是否 `dropped`）
+- `call_emitted` / `call_echo_skipped`：实际下发的调用（名称、参数哈希、`indexBase`、`replayEpoch`）
+- `finalize`：累计文本长度/哈希/`invoke` 与 wrapper 计数、可见正文长度、从正文解析出的调用数、已下发调用数、`finish_reason`
+
+判读方法：`finalize.rawInvocations` 是「我们累积到的文本里到底有几个调用」。若它是期望值的两倍，再看 `part` 里是否存在 `appendLen > 0` 且（`prefixMatch > 0` 或 `interiorOffset >= 0`）的记录：有 → 是重放没被识别而重复追加（服务端问题）；没有 → 上游/模型自己把同一段写了两遍（客户端看到重复调用是如实透传）。
+
 保存接口支持用 `query`、`chain_key` 或 `capture_id` 选中目标。例如：
 
 ```json

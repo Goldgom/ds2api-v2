@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"ds2api/internal/sse"
+	"ds2api/internal/toolcalldebug"
 )
 
 type StreamAccumulator struct {
@@ -48,10 +49,24 @@ type StreamAccumulatorResult struct {
 
 func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult {
 	out := StreamAccumulatorResult{}
+	trace := toolcalldebug.Enabled()
+	if trace {
+		toolcalldebug.Log("line", map[string]any{
+			"parts":       len(parsed.Parts),
+			"detectParts": len(parsed.ToolDetectionThinkingParts),
+			"rawTextLen":  a.RawText.Len(),
+			"rawThinkLen": a.RawThinking.Len(),
+		})
+	}
 	for _, p := range parsed.ToolDetectionThinkingParts {
-		trimmed, replayed := a.detectReplay.ApplyToBuilder(&a.ToolDetectionThinking, p.Text, sse.ReplayMayStartWithoutMarkup(p))
+		existing := a.ToolDetectionThinking.String()
+		permissive := sse.ReplayMayStartWithoutMarkup(p)
+		trimmed, replayed := a.detectReplay.ApplyToBuilder(&a.ToolDetectionThinking, p.Text, permissive)
 		if replayed {
 			out.Replayed = true
+		}
+		if trace {
+			tracePart("detection_thinking", existing, p, permissive, trimmed, replayed)
 		}
 		if trimmed != "" {
 			a.ToolDetectionThinking.WriteString(trimmed)
@@ -59,9 +74,14 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 	}
 	for _, p := range parsed.Parts {
 		if p.Type == "thinking" {
-			delta := a.applyThinkingPart(p.Text, sse.ReplayMayStartWithoutMarkup(p))
+			existing := a.RawThinking.String()
+			permissive := sse.ReplayMayStartWithoutMarkup(p)
+			delta := a.applyThinkingPart(p.Text, permissive)
 			if delta.Replayed {
 				out.Replayed = true
+			}
+			if trace {
+				tracePart("raw_thinking", existing, p, permissive, delta.RawText, delta.Replayed)
 			}
 			if delta.RawText != "" {
 				out.ContentSeen = true
@@ -71,9 +91,14 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 			}
 			continue
 		}
-		delta := a.applyTextPart(p.Text, sse.ReplayMayStartWithoutMarkup(p))
+		existing := a.RawText.String()
+		permissive := sse.ReplayMayStartWithoutMarkup(p)
+		delta := a.applyTextPart(p.Text, permissive)
 		if delta.Replayed {
 			out.Replayed = true
+		}
+		if trace {
+			tracePart("raw_text", existing, p, permissive, delta.RawText, delta.Replayed)
 		}
 		if delta.RawText != "" {
 			out.ContentSeen = true
@@ -83,6 +108,32 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 		}
 	}
 	return out
+}
+
+// tracePart records what one upstream part did to the accumulated text. The
+// match numbers are the ones that matter when a duplicate call has to be
+// explained: `prefixMatch` says how much of the part repeats the start of the
+// accumulated text, and `interiorOffset` finds the same repetition when the
+// part also carries the tail of the previous round in front of it. A part that
+// duplicates text but appends it anyway is exactly how a replayed call block
+// reaches the sieve twice.
+func tracePart(channel, existing string, p sse.ContentPart, permissive bool, appendText string, dropped bool) {
+	toolcalldebug.Log("part", map[string]any{
+		"channel":         channel,
+		"type":            p.Type,
+		"snapshot":        p.Snapshot,
+		"roundStart":      p.RoundStart,
+		"permissive":      permissive,
+		"existingLen":     len(existing),
+		"partLen":         len(p.Text),
+		"partHash":        toolcalldebug.Hash(p.Text),
+		"partPreview":     toolcalldebug.Preview(p.Text, 60),
+		"partInvocations": toolcalldebug.CountInvocations(p.Text),
+		"prefixMatch":     toolcalldebug.PrefixMatchLen(existing, p.Text),
+		"interiorOffset":  toolcalldebug.InteriorMatchOffset(existing, p.Text, 32, 4096),
+		"appendLen":       len(appendText),
+		"dropped":         dropped,
+	})
 }
 
 func (a *StreamAccumulator) applyThinkingPart(text string, permissive bool) StreamPartDelta {

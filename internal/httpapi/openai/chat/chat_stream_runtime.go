@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"ds2api/internal/sse"
 	streamengine "ds2api/internal/stream"
 	"ds2api/internal/toolcall"
+	"ds2api/internal/toolcalldebug"
 	"ds2api/internal/toolstream"
 )
 
@@ -107,6 +109,20 @@ func newChatStreamRuntime(
 	bufferToolContent bool,
 	emitEarlyToolDeltas bool,
 ) *chatStreamRuntime {
+	if toolcalldebug.Enabled() {
+		toolcalldebug.Log("request_start", map[string]any{
+			"req":                 completionID,
+			"model":               model,
+			"thinkingEnabled":     thinkingEnabled,
+			"searchEnabled":       searchEnabled,
+			"bufferToolContent":   bufferToolContent,
+			"emitEarlyToolDeltas": emitEarlyToolDeltas,
+			"toolNames":           len(toolNames),
+			"toolsRawPresent":     toolsRaw != nil,
+			"toolChoiceRequired":  toolChoice.IsRequired(),
+			"traceTarget":         toolcalldebug.Target(),
+		})
+	}
 	return &chatStreamRuntime{
 		w:                     w,
 		rc:                    rc,
@@ -224,6 +240,15 @@ func toolCallSignature(c toolcall.ParsedToolCall) string {
 	return c.Name + "\x00" + string(args)
 }
 
+// callNames is used by the tool-call trace only.
+func callNames(calls []toolcall.ParsedToolCall) []string {
+	names := make([]string, 0, len(calls))
+	for _, call := range calls {
+		names = append(names, call.Name+":"+toolcalldebug.Hash(toolCallSignature(call)))
+	}
+	return names
+}
+
 // emitToolCalls sends complete tool calls as one streamed delta.
 //
 // A call whose exact name+arguments was already emitted in an earlier replay
@@ -239,6 +264,13 @@ func (s *chatStreamRuntime) emitToolCalls(calls []toolcall.ParsedToolCall) {
 	for _, call := range calls {
 		sig := toolCallSignature(call)
 		if epoch, ok := s.emittedCallEpoch[sig]; ok && epoch < s.replayEpoch {
+			if toolcalldebug.Enabled() {
+				toolcalldebug.Log("call_echo_skipped", map[string]any{
+					"req":  s.completionID,
+					"name": call.Name,
+					"hash": toolcalldebug.Hash(sig),
+				})
+			}
 			continue
 		}
 		s.emittedCallEpoch[sig] = s.replayEpoch
@@ -246,6 +278,19 @@ func (s *chatStreamRuntime) emitToolCalls(calls []toolcall.ParsedToolCall) {
 	}
 	if len(fresh) == 0 {
 		return
+	}
+	if toolcalldebug.Enabled() {
+		for _, call := range fresh {
+			toolcalldebug.Log("call_emitted", map[string]any{
+				"req":          s.completionID,
+				"name":         call.Name,
+				"argsHash":     toolcalldebug.Hash(toolCallSignature(call)),
+				"argsPreview":  toolcalldebug.Preview(fmt.Sprintf("%v", call.Input), 80),
+				"indexBase":    s.toolCallIndexBase,
+				"replayEpoch":  s.replayEpoch,
+				"callsInBatch": len(fresh),
+			})
+		}
 	}
 	formatted := formatFinalStreamToolCallsFromIndex(fresh, s.streamToolCallIDs, s.toolsRaw, s.toolCallIndexBase)
 	s.toolCallIndexBase += len(formatted)
@@ -310,6 +355,31 @@ func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool)
 	outcome := assistantturn.FinalizeTurn(turn, assistantturn.FinalizeOptions{
 		AlreadyEmittedToolCalls: s.toolCallsEmitted || s.toolCallsDoneEmitted,
 	})
+	if toolcalldebug.Enabled() {
+		rawText := s.accumulator.RawText.String()
+		toolcalldebug.Log("finalize", map[string]any{
+			"req":                s.completionID,
+			"finishReason":       finishReason,
+			"rawTextLen":         len(rawText),
+			"rawTextHash":        toolcalldebug.Hash(rawText),
+			"rawInvocations":     toolcalldebug.CountInvocations(rawText),
+			"rawWrapperOpens":    toolcalldebug.CountWrapperOpens(rawText),
+			"visibleTextLen":     len(finalText),
+			"visibleInvocations": toolcalldebug.CountInvocations(finalText),
+			"rawThinkingLen":     len(s.accumulator.RawThinking.String()),
+			"detectThinkLen":     len(finalToolDetectionThinking),
+			"detectInvocations":  toolcalldebug.CountInvocations(finalToolDetectionThinking),
+			"textToolCalls":      len(turn.ToolCalls),
+			"textParsedNames":    callNames(turn.ToolCalls),
+			"toolCallsEmitted":   s.toolCallsEmitted,
+			"callsDoneEmitted":   s.toolCallsDoneEmitted,
+			"emittedCallCount":   len(s.emittedCallEpoch),
+			"replayEpoch":        s.replayEpoch,
+			"indexBase":          s.toolCallIndexBase,
+			"finishOutcome":      outcome.FinishReason,
+			"upstreamErr":        s.upstreamErr,
+		})
+	}
 	if outcome.ShouldFail {
 		status, message, code := outcome.Error.Status, outcome.Error.Message, outcome.Error.Code
 		if deferEmptyOutput {
@@ -405,6 +475,13 @@ func (s *chatStreamRuntime) onParsed(parsed sse.LineResult) streamengine.ParsedD
 					batch.flush()
 					s.toolCallsEmitted = true
 					s.toolCallsDoneEmitted = true
+					if toolcalldebug.Enabled() {
+						toolcalldebug.Log("sieve_calls", map[string]any{
+							"req":   s.completionID,
+							"count": len(evt.ToolCalls),
+							"names": callNames(evt.ToolCalls),
+						})
+					}
 					s.emitToolCalls(evt.ToolCalls)
 					continue
 				}

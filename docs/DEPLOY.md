@@ -299,6 +299,7 @@ VERCEL_TEAM_ID=team_xxxxxxxxxxxx   # 个人账号可留空
 | `DS2API_VERCEL_INTERNAL_SECRET` | 混合流式内部鉴权 | 回退用 `DS2API_ADMIN_KEY` |
 | `DS2API_VERCEL_STREAM_LEASE_TTL_SECONDS` | 流式 lease TTL | `900` |
 | `DS2API_RAW_STREAM_SAMPLE_ROOT` | raw stream 样本保存/读取根目录 | `tests/raw_stream_samples` |
+| `DS2API_DEBUG_TOOLCALL` | 工具调用流水追踪开关（`1/true` 写入 `logs/toolcall-debug.jsonl`，也可直接给文件/目录路径，或 `stdout`） | 关闭 |
 | `DS2API_STATIC_ADMIN_DIR` | WebUI 静态资源目录 | `static/admin` |
 | `DS2API_AUTO_BUILD_WEBUI` | 本地启动时是否自动构建缺失的 WebUI（`1/true/yes/on` 或 `0/false/no/off`） | 非 Vercel 默认开启 |
 | `VERCEL_TOKEN` | Vercel 同步 token | — |
