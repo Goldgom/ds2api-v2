@@ -972,20 +972,38 @@ test('resolveContinuationReplay drops an identical snapshot replay', () => {
   assert.equal(replay.dropped, false);
 });
 
-test('resolveContinuationReplay drops the stale tail of a diverged snapshot', () => {
-  const head = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
-  const replay = resolveContinuationReplay(`${head}旧的结尾`, `${head}重写后的结尾`);
-  assert.equal(replay.kept, head);
-  assert.equal(replay.append, '重写后的结尾');
-  assert.equal(replay.dropped, true);
+// Dedupe is one-sided: a chunk that only shares a head with the accumulated text
+// is appended, never used to cut that text apart. Cutting on a guess is what
+// handed one tool call the arguments of another.
+const similarHead = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
+
+test('resolveContinuationReplay never cuts accumulated text', () => {
+  const existing = `${similarHead}旧的结尾`;
+  const replay = resolveContinuationReplay(existing, `${similarHead}重写后的结尾`);
+  assert.equal(replay.kept, existing);
+  assert.equal(replay.append, `${similarHead}重写后的结尾`);
+  assert.equal(replay.dropped, false);
 });
 
-test('resolveContinuationReplay ignores an increment the snapshot already carries', () => {
-  const head = '我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。';
-  const increment = ' 另外补充第一点。';
-  const replay = resolveContinuationReplay(head, `${increment}${head}${increment}`);
-  assert.equal(replay.kept + replay.append, head + increment);
+test('resolveContinuationReplay keeps similar tool blocks apart', () => {
+  const first = '<|EPSE|tool_calls><|EPSE|invoke name="read"><|EPSE|parameter name="path"><![CDATA[x]]></|EPSE|parameter></|EPSE|tool_calls>';
+  const second = '<|EPSE|tool_calls><|EPSE|invoke name="ls"><|EPSE|parameter name="path"><![CDATA[.]]></|EPSE|parameter></|EPSE|invoke></|EPSE|tool_calls>';
+  const replay = resolveContinuationReplay(first, second);
+  assert.equal(replay.kept, first);
+  assert.equal(replay.append, second);
   assert.equal(replay.dropped, false);
+});
+
+test('resolveContinuationReplay keeps one copy across isolated snapshot chunks', () => {
+  const content = '第一段很长很长很长很长的回答内容，用来验证传输层分开投递的续答轮次。';
+  const first = ' 另外补充第一点。';
+  const second = ' 继续补充第二点。';
+  let accumulated = resolveContinuationReplay('', content).append;
+  accumulated += resolveContinuationReplay(accumulated, first).append;
+  accumulated += resolveContinuationReplay(accumulated, second).append;
+  const replay = resolveContinuationReplay(accumulated, `${content}${first}${second} 第二段补充。`);
+  accumulated = replay.kept + replay.append;
+  assert.equal(accumulated, `${content}${first}${second} 第二段补充。`);
 });
 
 test('resolveContinuationReplay keeps one copy across continue rounds', () => {
@@ -999,17 +1017,47 @@ test('resolveContinuationReplay keeps one copy across continue rounds', () => {
   assert.equal(accumulated, body);
 });
 
-test('resolveContinuationReplay keeps one copy when the transport coalesces rounds', () => {
-  let body = '第一段很长很长很长很长的回答内容，用来验证传输层合并后的快照重放。';
-  let accumulated = body;
-  for (const suffix of [' 第二段补充。', ' 第三段补充。']) {
-    accumulated = (() => {
-      const replay = resolveContinuationReplay(accumulated, `${suffix}${body}${suffix}`);
-      return replay.kept + replay.append;
-    })();
-    body += suffix;
+test('resolveContinuationReplay drops a stale state without losing text', () => {
+  const content = '第一段很长很长很长很长的回答内容，用来验证传输层重发的旧快照被丢弃。';
+  let accumulated = `${content} 第二段补充。`;
+  accumulated = (() => {
+    const replay = resolveContinuationReplay(accumulated, content);
+    return replay.kept + replay.append;
+  })();
+  assert.equal(accumulated, `${content} 第二段补充。`);
+  // A regenerated state is appended in full: nothing that was already streamed
+  // is dropped.
+  accumulated = (() => {
+    const replay = resolveContinuationReplay(accumulated, `${content} 重写过的第二段。`);
+    return replay.kept + replay.append;
+  })();
+  assert.equal(accumulated, `${content} 第二段补充。${content} 重写过的第二段。`);
+});
+
+test('ReplayTracker keeps similar tool calls intact whatever the chunking', () => {
+  const message = [
+    '<|EPSE|tool_calls>',
+    '<|EPSE|invoke name="ls">',
+    '<|EPSE|parameter name="intent"><![CDATA[列出目录]]></|EPSE|parameter>',
+    '<|EPSE|parameter name="path"><![CDATA[.]]></|EPSE|parameter>',
+    '</|EPSE|invoke>',
+    '<|EPSE|invoke name="read">',
+    '<|EPSE|parameter name="displayName"><![CDATA[读取来源指南]]></|EPSE|parameter>',
+    '<|EPSE|parameter name="intent"><![CDATA[读取来源指南]]></|EPSE|parameter>',
+    '</|EPSE|invoke>',
+    '</|EPSE|tool_calls>',
+  ].join('\n');
+
+  for (const size of [16, 24, 32, 48, 96, 4096]) {
+    const tracker = new ReplayTracker();
+    let accumulated = '';
+    for (let i = 0; i < message.length; i += size) {
+      const replay = tracker.resolve(accumulated, message.slice(i, i + size));
+      assert.equal(replay.dropped, false);
+      accumulated = replay.kept + replay.append;
+    }
+    assert.equal(accumulated, message);
   }
-  assert.equal(accumulated, body);
 });
 
 test('ReplayTracker drops a token-sized replay of a message with a tool call', () => {

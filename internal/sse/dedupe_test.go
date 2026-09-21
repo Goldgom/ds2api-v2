@@ -65,43 +65,59 @@ func TestResolveContinuationReplayDropsIdenticalSnapshot(t *testing.T) {
 	}
 }
 
-func TestResolveContinuationReplayDropsDivergedTail(t *testing.T) {
+// A chunk that only overlaps the accumulated text is never treated as a re-render
+// of it. Every rule in ResolveContinuationReplay is one-sided: it may drop what
+// the incoming chunk replayed, but it never cuts the accumulated text apart, so
+// no rule can destroy content that was already accumulated.
+func TestResolveContinuationReplayNeverCutsAccumulatedText(t *testing.T) {
 	head := "我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。"
 	existing := head + "旧的结尾"
 	incoming := head + "重写后的结尾"
 	replay := ResolveContinuationReplay(existing, incoming)
-	if !replay.Dropped {
-		t.Fatalf("expected diverged replay to drop the stale tail, got %+v", replay)
+	if replay.Dropped {
+		t.Fatalf("expected the accumulated text to survive, got %+v", replay)
 	}
-	if replay.Kept != head {
-		t.Fatalf("expected kept=%q, got %q", head, replay.Kept)
+	if replay.Kept != existing {
+		t.Fatalf("expected kept=%q, got %q", existing, replay.Kept)
 	}
-	if got := replay.Kept + replay.Append; got != incoming {
-		t.Fatalf("expected accumulated text %q, got %q", incoming, got)
+	if replay.Append != incoming {
+		t.Fatalf("expected the whole chunk to be appended, got %q", replay.Append)
 	}
 }
 
-func TestResolveContinuationReplayHandlesEmbeddedSnapshot(t *testing.T) {
-	head := "我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。"
-	t.Run("buffered increment already carried by the snapshot", func(t *testing.T) {
-		increment := " 另外补充第一点。"
-		incoming := increment + head + increment
-		replay := ResolveContinuationReplay(head, incoming)
-		if replay.Dropped {
-			t.Fatalf("expected no dropped tail, got %+v", replay)
-		}
-		if got := replay.Kept + replay.Append; got != head+increment {
-			t.Fatalf("expected %q, got %q", head+increment, got)
-		}
-	})
-	t.Run("buffered increment missing from the snapshot is kept", func(t *testing.T) {
-		increment := " 另外补充第一点。"
-		incoming := increment + head + " 全新的收尾。"
-		replay := ResolveContinuationReplay(head, incoming)
-		if got := replay.Kept + replay.Append; got != head+increment+" 全新的收尾。" {
-			t.Fatalf("expected buffered increment and new tail, got %q", got)
-		}
-	})
+// The next block of a message that repeats the same markup shares a long
+// prologue with the previous one. That overlap used to be taken as evidence
+// that the message was being re-rendered, and the accumulated text was cut at
+// the prologue - which handed one call the arguments of another.
+func TestResolveContinuationReplayKeepsSimilarToolBlocksApart(t *testing.T) {
+	first := `<|EPSE|tool_calls><|EPSE|invoke name="read"><|EPSE|parameter name="path"><![CDATA[x]]></|EPSE|parameter></|EPSE|tool_calls>`
+	second := `<|EPSE|tool_calls><|EPSE|invoke name="ls"><|EPSE|parameter name="path"><![CDATA[.]]></|EPSE|parameter></|EPSE|invoke></|EPSE|tool_calls>`
+	replay := ResolveContinuationReplay(first, second)
+	if replay.Dropped || replay.Kept != first || replay.Append != second {
+		t.Fatalf("expected the second block to be appended verbatim, got %+v", replay)
+	}
+}
+
+// A continue round delivers the increment of the previous round and the whole
+// message state of the next one as separate chunks (the transport keeps a
+// snapshot chunk apart from buffered increments). Resolving them in that order
+// keeps one copy of the message: the increment is new, and the snapshot that
+// carries it is recognised as a replay of the accumulated text.
+func TestResolveContinuationReplayKeepsOneCopyAcrossIsolatedChunks(t *testing.T) {
+	content := "第一段很长很长很长很长的回答内容，用来验证传输层分开投递的续答轮次。"
+	first := " 另外补充第一点。"
+	second := " 继续补充第二点。"
+	accumulated := ResolveContinuationReplay("", content).Append
+	accumulated += ResolveContinuationReplay(accumulated, first).Append
+	accumulated += ResolveContinuationReplay(accumulated, second).Append
+	// The next round resends the whole message state, which already carries
+	// everything accumulated so far.
+	replay := ResolveContinuationReplay(accumulated, content+first+second+" 第二段补充。")
+	accumulated = replay.Kept + replay.Append
+	want := content + first + second + " 第二段补充。"
+	if accumulated != want {
+		t.Fatalf("expected %q, got %q", want, accumulated)
+	}
 }
 
 func TestApplyContinuationReplayKeepsSingleCopyAcrossContinueRounds(t *testing.T) {
@@ -121,18 +137,18 @@ func TestApplyContinuationReplayKeepsSingleCopyAcrossContinueRounds(t *testing.T
 	}
 }
 
-func TestApplyContinuationReplayKeepsSingleCopyForCoalescedRounds(t *testing.T) {
-	content := "第一段很长很长很长很长的回答内容，用来验证传输层合并后的快照重放。"
-	body := content
-	accumulated := body
-	// The transport coalesces the buffered increment of the previous round with
-	// the whole snapshot of the next one.
-	for _, suffix := range []string{" 第二段补充。", " 第三段补充。"} {
-		accumulated = ApplyContinuationReplay(accumulated, suffix+body+suffix)
-		body += suffix
+func TestApplyContinuationReplayKeepsSingleCopyForStaleRounds(t *testing.T) {
+	content := "第一段很长很长很长很长的回答内容，用来验证传输层重发的旧快照被丢弃。"
+	accumulated := content + " 第二段补充。"
+	// A round that resends the stale state must not append anything...
+	accumulated = ApplyContinuationReplay(accumulated, content)
+	if accumulated != content+" 第二段补充。" {
+		t.Fatalf("expected the stale state to be dropped, got %q", accumulated)
 	}
-	if accumulated != body {
-		t.Fatalf("expected %q, got %q", body, accumulated)
+	// ...and a round that carries a regenerated state must not lose text either.
+	accumulated = ApplyContinuationReplay(accumulated, content+" 重写过的第二段。")
+	if accumulated != content+" 第二段补充。"+content+" 重写过的第二段。" {
+		t.Fatalf("expected both copies without any loss, got %q", accumulated)
 	}
 }
 
@@ -237,15 +253,19 @@ func TestReplayTrackerKeepsHeadWhenReplayDiverges(t *testing.T) {
 		t.Fatalf("expected the replay to leave the message intact, got %q", accumulated)
 	}
 
-	// The upstream then re-renders the tail from inside the replayed region.
+	// The upstream then stops replaying and continues with new content that
+	// happens to share a few runes with the aligned position.
 	diverged := tracker.Resolve(accumulated, chunk(72, 76)+"被改写的结尾。")
-	if got, want := diverged.Kept, chunk(0, 76); got != want {
-		t.Fatalf("expected the aligned head %q, got %q", want, got)
+	if diverged.Kept != accumulated {
+		t.Fatalf("expected the accumulated text to stay untouched, got %q", diverged.Kept)
+	}
+	if diverged.Dropped {
+		t.Fatalf("a guessed replay must never cut accumulated text")
 	}
 	if diverged.Append != "被改写的结尾。" {
-		t.Fatalf("expected the new tail, got %q", diverged.Append)
+		t.Fatalf("expected only the unmatched tail, got %q", diverged.Append)
 	}
-	if !diverged.Dropped {
-		t.Fatalf("expected the stale tail to be dropped")
+	if got := diverged.Kept + diverged.Append; got != message+"被改写的结尾。" {
+		t.Fatalf("unexpected accumulated text %q", got)
 	}
 }

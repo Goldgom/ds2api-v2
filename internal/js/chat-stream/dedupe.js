@@ -4,17 +4,22 @@
 // snapshot when a stream opens and at the start of every `continue` round, so
 // appending such a snapshot verbatim duplicates everything it replays -
 // including tool-call markup, which the sieve then parses again and emits as
-// another tool call with a fresh id. The transport may also coalesce buffered
-// increments with the next snapshot, so a replay does not always start at
-// offset 0 of the incoming chunk.
+// another tool call with a fresh id.
+//
+// The rules are one-sided: they only ever drop the text an incoming chunk
+// replayed, never cut the accumulated text apart. Cutting content that was only
+// *guessed* to be a replay is what corrupted tool-call arguments (a message made
+// of several similar blocks shares a long prologue with its own next block), and
+// a re-rendered snapshot can only be appended in any case, because text that was
+// already streamed cannot be retracted.
 const MIN_CONTINUATION_SNAPSHOT_LEN = 32;
 
 // resolveContinuationReplay decides how much of an incoming chunk is new.
 //
-// kept    replaces the accumulated text.
+// kept    replaces the accumulated text; it is that text itself.
 // append  is appended after kept; it holds every byte that is new.
-// dropped reports that already accumulated text was discarded, so derived
-//         state (such as the tool sieve) has to be rebuilt.
+// dropped reports that a replay that had already been consumed was taken back,
+//         so derived state (such as the tool sieve) has to be rebuilt.
 function resolveContinuationReplay(existing, incoming) {
   const current = typeof existing === 'string' ? existing : '';
   if (!incoming) {
@@ -35,59 +40,7 @@ function resolveContinuationReplay(existing, incoming) {
   if (current.startsWith(incoming)) {
     return { kept: current, append: '', dropped: false };
   }
-  // Snapshot replay that diverged: upstream re-rendered the message from a
-  // point both copies share. Drop the stale tail past that point.
-  const keep = sharedRunePrefixLen(current, incoming);
-  if (keep >= MIN_CONTINUATION_SNAPSHOT_LEN) {
-    return { kept: current.slice(0, keep), append: incoming.slice(keep), dropped: true };
-  }
-  // A replay that starts inside the chunk, because a buffered increment and
-  // the next snapshot were delivered together.
-  const at = embeddedSnapshotStart(current, incoming);
-  if (at > 0) {
-    const head = incoming.slice(0, at);
-    const snapshot = incoming.slice(at);
-    const inner = resolveContinuationReplay(current, snapshot);
-    // A buffered increment is always generated before the snapshot that
-    // follows it, so the snapshot already carries it.
-    return {
-      kept: inner.kept,
-      append: (snapshot.indexOf(head) >= 0 ? '' : head) + inner.append,
-      dropped: inner.dropped,
-    };
-  }
   return { kept: current, append: incoming, dropped: false };
-}
-
-// embeddedSnapshotStart returns the offset inside incoming where the upstream
-// restarted the replayed message, or -1 when there is no embedded replay.
-function embeddedSnapshotStart(existing, incoming) {
-  const probe = existing.slice(0, MIN_CONTINUATION_SNAPSHOT_LEN);
-  if (!probe) {
-    return -1;
-  }
-  // Offset 0 is already covered by the prefix rules above.
-  const idx = incoming.slice(1).indexOf(probe);
-  if (idx < 0) {
-    return -1;
-  }
-  return 1 + idx;
-}
-
-// sharedRunePrefixLen mirrors the Go helper. It never splits a surrogate pair.
-function sharedRunePrefixLen(a, b) {
-  const limit = Math.min(a.length, b.length);
-  let i = 0;
-  while (i < limit && a[i] === b[i]) {
-    i += 1;
-  }
-  if (i > 0) {
-    const unit = b.charCodeAt(i - 1);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      i -= 1;
-    }
-  }
-  return i;
 }
 
 // TOOL_MARKUP_HINTS are fragments that only ever occur inside tool-call markup.
@@ -172,12 +125,11 @@ class ReplayTracker {
       return { kept: existing, append: '', dropped: false };
     }
     if (this.confirmed && matched > 0) {
-      const kept = existing.slice(0, this.offset + matched);
-      const replay = {
-        kept,
-        append: incoming.slice(matched),
-        dropped: kept.length < existing.length,
-      };
+      // The replayed fragment stopped matching. Only the matched prefix is known
+      // to be duplicated, so keep the accumulated text untouched and continue
+      // with the rest. Cutting the text here would destroy content that was only
+      // guessed to be a replay.
+      const replay = { kept: existing, append: incoming.slice(matched), dropped: false };
       this.reset();
       return replay;
     }
@@ -185,11 +137,20 @@ class ReplayTracker {
     return null;
   }
 
-  // The opening evidence has to be tool-call markup: legitimately repeated
-  // output is byte-identical to a replayed text fragment, so plain text can
-  // never be treated as a replay on its own. A chunk that was appended verbatim
-  // stays appended until the next chunk confirms the replay, so a false
-  // candidate costs nothing.
+  // The evidence is deliberately narrow, because both a missed replay and a
+  // false one are costly and the two are hard to tell apart in text:
+  //
+  //   - the chunk must restart the message, i.e. be a prefix of the accumulated
+  //     text. A continue round that resends the message token by token always
+  //     starts that way.
+  //   - it must carry tool-call markup. Legitimately repeated output is
+  //     byte-identical to a replayed text fragment, so plain text can never be a
+  //     replay on its own - and neither can markup that merely appears somewhere
+  //     inside the message, which is why matching an interior offset is not
+  //     accepted here.
+  //
+  // A chunk that was appended verbatim stays appended until the next chunk
+  // confirms the replay, so a false candidate costs nothing.
   openAlignment(existing, incoming, replay) {
     if (replay.dropped) {
       return;
@@ -202,20 +163,20 @@ class ReplayTracker {
     if (incoming.length < MIN_REPLAY_MARKUP_LEN || !containsToolCallMarkup(incoming)) {
       return;
     }
-    const at = existing.indexOf(incoming);
-    if (at < 0) {
+    if (!existing.startsWith(incoming)) {
       return;
     }
     this.active = true;
     this.confirmed = false;
     this.base = existing.length;
-    this.offset = at + incoming.length;
+    this.offset = incoming.length;
   }
 }
 
 // trimContinuationOverlap returns only the part of incoming that should be
-// appended to the accumulated text. Callers that can drop a stale tail must use
-// resolveContinuationReplay or ReplayTracker instead.
+// appended to the accumulated text. Callers that own a mutable buffer must use
+// resolveContinuationReplay or ReplayTracker instead, because a replay that was
+// already consumed can be taken back.
 function trimContinuationOverlap(existing, incoming) {
   return resolveContinuationReplay(existing, incoming).append;
 }

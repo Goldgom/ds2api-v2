@@ -114,7 +114,11 @@ func TestStreamAccumulatorStripsInlineCitationAndReferenceMarkers(t *testing.T) 
 	}
 }
 
-func TestStreamAccumulatorReportsAndRewindsDivergedReplay(t *testing.T) {
+// A chunk that only overlaps the accumulated text is never treated as a render
+// of it: dedupe is one-sided, so a message that repeats the same markup (the
+// next tool-call block, a repeated parameter block) can never make the
+// accumulator drop content it already holds.
+func TestStreamAccumulatorAppendsWithoutLosingRepeatedHeadText(t *testing.T) {
 	acc := StreamAccumulator{}
 	head := "我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。"
 
@@ -130,13 +134,38 @@ func TestStreamAccumulatorReportsAndRewindsDivergedReplay(t *testing.T) {
 		Parsed: true,
 		Parts:  []sse.ContentPart{{Type: "text", Text: head + "重写后的结尾"}},
 	})
-	if !second.Replayed {
-		t.Fatalf("expected the diverged replay to be reported, got %#v", second)
+	if second.Replayed {
+		t.Fatalf("expected no rewind for a chunk that merely shares a head, got %#v", second)
 	}
-	if got := acc.RawText.String(); got != head+"重写后的结尾" {
-		t.Fatalf("raw text = %q", got)
+	want := head + "旧的结尾" + head + "重写后的结尾"
+	if got := acc.RawText.String(); got != want {
+		t.Fatalf("raw text = %q, want %q", got, want)
 	}
-	if got := acc.Text.String(); got != head+"重写后的结尾" {
-		t.Fatalf("visible text = %q", got)
+	if got := acc.Text.String(); got != want {
+		t.Fatalf("visible text = %q, want %q", got, want)
+	}
+}
+
+// A whole message state that the upstream re-sent is dropped when everything it
+// carries is already accumulated, and only its new tail is appended when it grew.
+func TestStreamAccumulatorDropsReplayedSnapshotAndAppendsNewTail(t *testing.T) {
+	acc := StreamAccumulator{}
+	head := "我们被问到：这是一个很长的续答快照前缀，用来验证去重逻辑不会误伤正常 token。"
+	acc.Apply(sse.LineResult{Parsed: true, Parts: []sse.ContentPart{{Type: "text", Text: head}}})
+
+	replayed := acc.Apply(sse.LineResult{Parsed: true, Parts: []sse.ContentPart{{Type: "text", Text: head, Snapshot: true}}})
+	if got := acc.RawText.String(); got != head {
+		t.Fatalf("expected the replayed snapshot to be dropped, got %q", got)
+	}
+	if len(replayed.Parts) != 0 {
+		t.Fatalf("expected no delta for a fully replayed snapshot, got %#v", replayed.Parts)
+	}
+
+	grown := acc.Apply(sse.LineResult{Parsed: true, Parts: []sse.ContentPart{{Type: "text", Text: head + " 新的结尾。", Snapshot: true}}})
+	if got := acc.RawText.String(); got != head+" 新的结尾。" {
+		t.Fatalf("expected only the new tail to be appended, got %q", got)
+	}
+	if len(grown.Parts) != 1 || grown.Parts[0].VisibleText != " 新的结尾。" {
+		t.Fatalf("expected the new tail as the delta, got %#v", grown.Parts)
 	}
 }

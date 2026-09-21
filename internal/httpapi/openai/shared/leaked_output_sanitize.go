@@ -63,6 +63,13 @@ func sanitizeLeakedOutput(text string) string {
 	return out
 }
 
+// stripLeakedToolCallWrapperBlocks removes complete tool-call wrappers that
+// were turned into structured tool calls, so they do not also show up in the
+// visible text.
+//
+// A wrapper that does NOT parse into a call must be left alone: the streaming
+// sieve releases such a block as plain text on purpose, and dropping it here
+// would leave the client with an empty message and no tool call at all.
 func stripLeakedToolCallWrapperBlocks(text string) string {
 	if text == "" {
 		return text
@@ -87,6 +94,12 @@ func stripLeakedToolCallWrapperBlocks(text string) string {
 		if !ok {
 			b.WriteString(text[tag.Start : tag.End+1])
 			pos = tag.End + 1
+			continue
+		}
+		block := text[tag.Start : closeTag.End+1]
+		if len(toolcall.ParseStandaloneToolCallsDetailed(block, nil).Calls) == 0 {
+			b.WriteString(block)
+			pos = closeTag.End + 1
 			continue
 		}
 		pos = closeTag.End + 1

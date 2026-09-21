@@ -12,6 +12,14 @@ import (
 type ContentPart struct {
 	Text string
 	Type string
+	// Snapshot marks a part that carries a whole message state the upstream
+	// re-sent - a `response` envelope with whole fragments - instead of an
+	// incremental delta. Only such a part may be treated as a re-rendering of
+	// the text that was already accumulated: an ordinary delta that merely
+	// shares a textual prologue with it (the next tool-call block of a message
+	// that repeats the same markup) is new content, and treating it as a replay
+	// cuts the accumulated text apart.
+	Snapshot bool
 }
 
 func ParseDeepSeekSSELine(raw []byte) (map[string]any, bool, bool) {
@@ -305,12 +313,12 @@ func appendWrappedFragments(val map[string]any, partType string, newType *string
 		switch typeName {
 		case "THINK", "THINKING":
 			*newType = "thinking"
-			appendContentPart(parts, content, "thinking")
+			appendContentPartWithSnapshot(parts, content, "thinking", true)
 		case "RESPONSE":
 			*newType = "text"
-			appendContentPart(parts, content, "text")
+			appendContentPartWithSnapshot(parts, content, "text", true)
 		default:
-			appendContentPart(parts, content, partType)
+			appendContentPartWithSnapshot(parts, content, partType, true)
 		}
 	}
 }
@@ -322,10 +330,14 @@ func parseFragmentTypeContent(m map[string]any) (string, string, string) {
 }
 
 func appendContentPart(parts *[]ContentPart, content, kind string) {
+	appendContentPartWithSnapshot(parts, content, kind, false)
+}
+
+func appendContentPartWithSnapshot(parts *[]ContentPart, content, kind string, snapshot bool) {
 	if content == "" {
 		return
 	}
-	*parts = append(*parts, ContentPart{Text: content, Type: kind})
+	*parts = append(*parts, ContentPart{Text: content, Type: kind, Snapshot: snapshot})
 }
 
 var thinkClosePattern = regexp.MustCompile(`(?i)</\s*think\s*>`)
@@ -343,14 +355,16 @@ func splitThinkingParts(parts []ContentPart) ([]ContentPart, bool) {
 			// Already transitioned — treat remaining thinking as text.
 			cleaned := stripThinkTags(p.Text)
 			if cleaned != "" {
-				out = append(out, ContentPart{Text: cleaned, Type: "text"})
+				p.Text, p.Type = cleaned, "text"
+				out = append(out, p)
 			}
 			continue
 		}
 		if p.Type != "thinking" {
 			cleaned := stripThinkTags(p.Text)
 			if cleaned != "" {
-				out = append(out, ContentPart{Text: cleaned, Type: p.Type})
+				p.Text = cleaned
+				out = append(out, p)
 			}
 			continue
 		}
@@ -364,11 +378,13 @@ func splitThinkingParts(parts []ContentPart) ([]ContentPart, bool) {
 		before := p.Text[:loc[0]]
 		after := p.Text[loc[1]:]
 		if before != "" {
-			out = append(out, ContentPart{Text: before, Type: "thinking"})
+			p.Text = before
+			out = append(out, p)
 		}
 		after = stripThinkTags(after)
 		if after != "" {
-			out = append(out, ContentPart{Text: after, Type: "text"})
+			p.Text, p.Type = after, "text"
+			out = append(out, p)
 		}
 	}
 	if !thinkingDone {

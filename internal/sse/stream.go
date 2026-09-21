@@ -53,6 +53,12 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 		var toolDetectionThinkingBuffer strings.Builder
 		var textPendingType string
 		var thinkingPendingType string
+		// Pending snapshot flags mark that the buffered text comes from a chunk
+		// that carried a whole message state. They are reported on the emitted
+		// part so that consumers can tell a replayed message apart from an
+		// ordinary delta.
+		var textPendingSnapshot bool
+		var thinkingPendingSnapshot bool
 		var anyFlushed bool
 		var pendingResponseMessageID int
 
@@ -149,13 +155,15 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 			var parts []ContentPart
 
 			if thinkingChars > 0 {
-				parts = append(parts, ContentPart{Text: thinkingBuffer.String(), Type: thinkingPendingType})
+				parts = append(parts, ContentPart{Text: thinkingBuffer.String(), Type: thinkingPendingType, Snapshot: thinkingPendingSnapshot})
 				thinkingBuffer.Reset()
+				thinkingPendingSnapshot = false
 			}
 
 			if textChars > 0 {
-				parts = append(parts, ContentPart{Text: textBuffer.String(), Type: textPendingType})
+				parts = append(parts, ContentPart{Text: textBuffer.String(), Type: textPendingType, Snapshot: textPendingSnapshot})
 				textBuffer.Reset()
+				textPendingSnapshot = false
 			}
 
 			if len(parts) > 0 || toolDetectionThinkingBuffer.Len() > 0 {
@@ -205,9 +213,11 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 							if p.Type == "thinking" {
 								thinkingBuffer.WriteString(p.Text)
 								thinkingPendingType = "thinking"
+								thinkingPendingSnapshot = p.Snapshot
 							} else {
 								textBuffer.WriteString(p.Text)
 								textPendingType = p.Type
+								textPendingSnapshot = p.Snapshot
 							}
 						}
 						flushBuffer(true)
@@ -256,6 +266,26 @@ func startParsedLinePumpWithConfig(ctx context.Context, body io.Reader, thinking
 					toolDetectionThinkingBuffer.WriteString(p.Text)
 				}
 				for _, p := range result.Parts {
+					if p.Snapshot {
+						// A replayed snapshot has to stay a chunk of its own. Handling it
+						// together with buffered increments would hide that it carries a
+						// whole message state, and consumers could then only guess from
+						// the text whether the message was replayed.
+						if hasBufferedData() {
+							flushBuffer(true)
+						}
+						if p.Type == "thinking" {
+							thinkingBuffer.WriteString(p.Text)
+							thinkingPendingType = "thinking"
+							thinkingPendingSnapshot = true
+						} else {
+							textBuffer.WriteString(p.Text)
+							textPendingType = p.Type
+							textPendingSnapshot = true
+						}
+						flushBuffer(true)
+						continue
+					}
 					if p.Type == "thinking" {
 						if textBuffer.Len() > 0 {
 							flushBuffer(true)

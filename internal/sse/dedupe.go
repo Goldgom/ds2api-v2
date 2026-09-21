@@ -43,23 +43,41 @@ func containsToolCallMarkup(s string) bool {
 // replays - including tool-call markup, which the tool sieve then parses a
 // second time and emits as another tool call with a fresh id.
 //
-// The surrounding transport may also coalesce buffered increments with the next
-// snapshot into a single chunk, so a replay does not always start at offset 0
-// of the incoming chunk.
+// Snapshots are recognised structurally, not by comparing text: the parser
+// marks the chunk as a snapshot (ContentPart.Snapshot) and the transport keeps
+// it in a chunk of its own, so a snapshot is compared with the accumulated text
+// as a whole instead of being mixed with buffered increments.
 type ContinuationReplay struct {
-	// Kept replaces the accumulated text. It is that text itself in the common
-	// case, and a shortened version of it when the upstream re-rendered the
-	// message from a point that both copies share.
+	// Kept replaces the accumulated text. It is always either that text itself
+	// or that text without the tail that was appended from an earlier chunk of
+	// the same replay (see ReplayTracker); accumulated text is never cut.
 	Kept string
 	// Append is the text to append after Kept. It holds every byte that is new,
 	// so incremental consumers such as the tool sieve must process Append.
 	Append string
-	// Dropped reports that text which had already been accumulated was
-	// discarded. State derived from that text has to be rebuilt.
+	// Dropped reports that a replay that had already been consumed was taken
+	// back, so state derived from it (such as a tool-call sieve) has to be
+	// rebuilt.
 	Dropped bool
 }
 
 // ResolveContinuationReplay decides how much of an incoming chunk is new.
+//
+// The rules are deliberately one-sided: they only ever drop text the incoming
+// chunk replayed, never cut the accumulated text apart. Cutting content that was
+// only *guessed* to be a replay is what made the tool sieve hand one call the
+// arguments of another, and neither a missed replay nor a false one may destroy
+// content. A message made of several similar tool-call blocks shares a long
+// textual prologue with its own next block, so overlap alone is never evidence
+// that the message is being re-rendered.
+//
+// Whole message states that the upstream re-sent are recognised structurally
+// instead: the parser marks them (ContentPart.Snapshot) and the transport keeps
+// them in a chunk of their own, so their text can be compared with the
+// accumulated text as a whole. A re-rendered snapshot that keeps everything
+// already accumulated is therefore handled by the prefix rules below, and one
+// that drops something can only append - state that was already streamed can
+// not be retracted anyway.
 func ResolveContinuationReplay(existing, incoming string) ContinuationReplay {
 	keepAll := ContinuationReplay{Kept: existing}
 	if incoming == "" {
@@ -80,60 +98,7 @@ func ResolveContinuationReplay(existing, incoming string) ContinuationReplay {
 	if strings.HasPrefix(existing, incoming) {
 		return keepAll
 	}
-	// Snapshot replay that diverged: upstream re-rendered the message from a
-	// point both copies share. Drop the stale tail past that point and take
-	// only the regenerated remainder, otherwise every replayed round appends
-	// another full copy of the message.
-	if keep := sharedRunePrefixLen(existing, incoming); utf8.RuneCountInString(existing[:keep]) >= minContinuationSnapshotLen {
-		return ContinuationReplay{Kept: existing[:keep], Append: incoming[keep:], Dropped: true}
-	}
-	// A replay that starts inside the chunk, because a buffered increment and
-	// the next snapshot were delivered together.
-	if at := embeddedSnapshotStart(existing, incoming); at > 0 {
-		head := incoming[:at]
-		snapshot := incoming[at:]
-		inner := ResolveContinuationReplay(existing, snapshot)
-		if strings.Contains(snapshot, head) {
-			// A buffered increment is always generated before the snapshot that
-			// follows it, so the snapshot already carries it.
-			head = ""
-		}
-		return ContinuationReplay{
-			Kept:    inner.Kept,
-			Append:  head + inner.Append,
-			Dropped: inner.Dropped,
-		}
-	}
 	return ContinuationReplay{Kept: existing, Append: incoming}
-}
-
-// embeddedSnapshotStart returns the offset inside incoming where the upstream
-// restarted the replayed message, or -1 when there is no embedded replay.
-func embeddedSnapshotStart(existing, incoming string) int {
-	probe := runePrefix(existing, minContinuationSnapshotLen)
-	if probe == "" || len(probe) > len(incoming) {
-		return -1
-	}
-	// Offset 0 is already covered by the prefix rules above. A UTF-8 encoded
-	// rune never starts with a continuation byte, so a match can only begin on
-	// a rune boundary.
-	idx := strings.Index(incoming[1:], probe)
-	if idx < 0 {
-		return -1
-	}
-	return 1 + idx
-}
-
-// runePrefix returns the first n runes of s, or s itself when it is shorter.
-func runePrefix(s string, n int) string {
-	count := 0
-	for i := range s {
-		if count == n {
-			return s[:i]
-		}
-		count++
-	}
-	return s
 }
 
 // sharedRunePrefixLen returns the length in bytes of the longest common prefix
@@ -160,9 +125,9 @@ func sharedRunePrefixLen(a, b string) int {
 // appended to the accumulated text.
 //
 // Callers that own a mutable buffer must use TrimContinuationReplayFromBuilder
-// (or ResolveContinuationReplay) instead: when the upstream replayed a snapshot
-// that diverged from the accumulated text, the stale tail has to be dropped as
-// well, which this wrapper cannot do.
+// (or ResolveContinuationReplay) instead: when a replay that was already
+// consumed is taken back, the tail it contributed has to be dropped as well,
+// which this wrapper cannot do.
 func TrimContinuationOverlap(existing, incoming string) string {
 	return ResolveContinuationReplay(existing, incoming).Append
 }
@@ -247,10 +212,11 @@ func (t *ReplayTracker) followReplay(existing, incoming string) (ContinuationRep
 		return ContinuationReplay{Kept: existing}, true
 	}
 	if t.confirmed && matched > 0 {
-		// The replay ran into regenerated content: keep the shared head and
-		// continue with the new tail.
-		kept := existing[:t.offset+matched]
-		replay := ContinuationReplay{Kept: kept, Append: incoming[matched:], Dropped: len(kept) < len(existing)}
+		// The replayed fragment stopped matching the accumulated text. Only the
+		// matched prefix is known to be duplicated, so keep the accumulated text
+		// untouched and continue with the rest of the chunk. Cutting the text
+		// here would destroy content that was only guessed to be a replay.
+		replay := ContinuationReplay{Kept: existing, Append: incoming[matched:]}
 		t.Reset()
 		return replay, true
 	}
@@ -261,13 +227,21 @@ func (t *ReplayTracker) followReplay(existing, incoming string) (ContinuationRep
 // openAlignment starts an alignment when incoming looks like a replayed fragment
 // of a message the upstream already sent.
 //
-// The opening evidence has to be tool-call markup: legitimately repeated output
-// (a repeated table row, a run of identical characters) is byte-identical to a
-// replayed text fragment, so plain text can never be treated as a replay on its
-// own. Markup, on the other hand, is only ever repeated when the upstream
-// replayed it, and it is exactly what makes a duplicated tool call. Chunks that
-// were appended verbatim stay appended until the next chunk confirms the replay,
-// so a false candidate costs nothing.
+// The evidence is deliberately narrow, because both a missed replay and a false
+// one are costly and the two are hard to tell apart in text:
+//
+//   - the chunk must restart the message, i.e. it must be a prefix of the
+//     accumulated text. A `continue` round that resends the message token by
+//     token always starts that way.
+//   - it must carry tool-call markup. Legitimately repeated output (a repeated
+//     table row, a run of identical characters, a repeated parameter block) is
+//     byte-identical to a replayed text fragment, so plain text can never be
+//     treated as a replay on its own - and neither can markup that merely
+//     appears somewhere inside the message, which is why matching an interior
+//     offset is not accepted here.
+//
+// Chunks that were appended verbatim stay appended until the next chunk
+// confirms the replay, so a false candidate costs nothing.
 func (t *ReplayTracker) openAlignment(existing, incoming string, replay ContinuationReplay) {
 	if replay.Dropped {
 		return
@@ -280,12 +254,11 @@ func (t *ReplayTracker) openAlignment(existing, incoming string, replay Continua
 	if utf8.RuneCountInString(incoming) < minReplayMarkupRunes || !containsToolCallMarkup(incoming) {
 		return
 	}
-	at := strings.Index(existing, incoming)
-	if at < 0 {
+	if !strings.HasPrefix(existing, incoming) {
 		return
 	}
 	t.active, t.confirmed = true, false
-	t.base, t.offset = len(existing), at+len(incoming)
+	t.base, t.offset = len(existing), len(incoming)
 }
 
 // ApplyToBuilder resolves incoming against existing, rewinding existing when the
