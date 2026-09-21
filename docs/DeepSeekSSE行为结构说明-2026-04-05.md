@@ -332,5 +332,6 @@ parse SSE block
 
 1. 每条流开头与每个 `continue` 轮次开头都会出现一个完整 `response` envelope（`fragments` 里带着当时的完整 `content`）。它与上一轮已经收到的正文高度重合，直接追加就会把整条消息（包括其中的 EPSE 工具块）复制一份，工具调用因此会被解析成第二个调用。
 2. 轮次切换时，上一轮尾部尚未下发的无路径增量会和下一个快照落在同一个 `data:` 序列里；本项目的行泵还会按 `MinChars` / `MaxWait` 把相邻增量合并成一块，因此**重放不一定出现在块的起始位置**，去重必须能识别块内部的重放起点。
+3. 有的账号/轮次不会一次性重发整条快照，而是把重放内容重新按 token 逐段下发：这些片段每个都短于 32 字，单块规则看不到任何快照特征，必须按"对齐已累积文本"的方式识别（见下条）。
 
 按消息累积处理时的判定与后果见 [`docs/toolcall-semantics.md`](./toolcall-semantics.md) 第 7 节；对应实现为 `internal/sse/dedupe.go`（Go）与 `internal/js/chat-stream/dedupe.js`（Node）。检查上游是否真的在重放时，先看原始 SSE 里同一段内容是否在轮次边界被再次下发，而不必先怀疑 sieve 或 emitter。

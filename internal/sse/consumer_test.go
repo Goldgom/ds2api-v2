@@ -1,6 +1,7 @@
 package sse
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -26,6 +27,43 @@ func TestCollectStreamDedupesContinueSnapshotReplay(t *testing.T) {
 	got := CollectStream(resp, true, true)
 	if got.Thinking != prefix+"继续分析" {
 		t.Fatalf("unexpected thinking after dedupe: %q", got.Thinking)
+	}
+}
+
+func TestCollectStreamDropsTokenSizedReplay(t *testing.T) {
+	block := `<tool_calls><invoke name="search"><parameter name="q">golang duplicate tool call replay</parameter></invoke></tool_calls>`
+	message := "我先说明一下思路，然后给出调用：" + block + " 然后就结束了。"
+	line := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+		return "data: " + string(b)
+	}
+
+	lines := []string{line(map[string]any{"p": "response/content", "v": message})}
+	runes := []rune(message)
+	// A continue round that resends the message one small fragment at a time.
+	for i := 0; i < len(runes); i += 24 {
+		end := i + 24
+		if end > len(runes) {
+			end = len(runes)
+		}
+		lines = append(lines, line(map[string]any{"p": "response/content", "v": string(runes[i:end])}))
+	}
+	lines = append(lines,
+		line(map[string]any{"p": "response/content", "v": " 后面是新增内容。"}),
+		"data: [DONE]",
+		``,
+	)
+
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(strings.Join(lines, "\n")))}
+	got := CollectStream(resp, true, true)
+	if want := message + " 后面是新增内容。"; got.Text != want {
+		t.Fatalf("expected %q, got %q", want, got.Text)
+	}
+	if count := strings.Count(got.Text, block); count != 1 {
+		t.Fatalf("expected a single tool-call block, got %d in %q", count, got.Text)
 	}
 }
 

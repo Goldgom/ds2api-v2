@@ -29,7 +29,7 @@ const {
   createLeaseReleaser,
 } = require('./http_internal');
 const {
-  resolveContinuationReplay,
+  ReplayTracker,
 } = require('./dedupe');
 
 const DEEPSEEK_COMPLETION_URL = 'https://chat.deepseek.com/api/v0/chat/completion';
@@ -174,6 +174,8 @@ async function handleVercelStream(req, res, rawBody, payload) {
     let currentType = thinkingEnabled ? 'thinking' : 'text';
     let thinkingText = '';
     let outputText = '';
+    const thinkingReplay = new ReplayTracker();
+    const outputReplay = new ReplayTracker();
     let usagePrompt = finalPrompt;
     const toolSieveEnabled = toolPolicy.toolSieveEnabled;
     let toolSieveState = createToolSieveState();
@@ -361,7 +363,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
                 }
                 if (p.type === 'thinking') {
                   if (thinkingEnabled) {
-                    const replay = resolveContinuationReplay(thinkingText, p.text);
+                    const replay = thinkingReplay.resolve(thinkingText, p.text);
                     if (replay.dropped) {
                       thinkingText = replay.kept;
                       toolSieveState = createToolSieveState();
@@ -374,7 +376,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
                     deltaCoalescer.append('reasoning_content', replay.append);
                   }
                 } else {
-                  const replay = resolveContinuationReplay(outputText, p.text);
+                  const replay = outputReplay.resolve(outputText, p.text);
                   if (replay.dropped) {
                     outputText = replay.kept;
                     toolSieveState = createToolSieveState();

@@ -16,6 +16,15 @@ type StreamAccumulator struct {
 	ToolDetectionThinking strings.Builder
 	RawText               strings.Builder
 	Text                  strings.Builder
+
+	// One replay tracker per accumulated stream. A continue round resends the
+	// message, and the upstream may deliver that replay as many small deltas
+	// that stay below the single-chunk snapshot floor.
+	rawThinkingReplay sse.ReplayTracker
+	thinkingReplay    sse.ReplayTracker
+	detectReplay      sse.ReplayTracker
+	rawTextReplay     sse.ReplayTracker
+	textReplay        sse.ReplayTracker
 }
 
 type StreamPartDelta struct {
@@ -40,7 +49,7 @@ type StreamAccumulatorResult struct {
 func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult {
 	out := StreamAccumulatorResult{}
 	for _, p := range parsed.ToolDetectionThinkingParts {
-		trimmed, replayed := sse.TrimContinuationReplayFromBuilder(&a.ToolDetectionThinking, p.Text)
+		trimmed, replayed := a.detectReplay.ApplyToBuilder(&a.ToolDetectionThinking, p.Text)
 		if replayed {
 			out.Replayed = true
 		}
@@ -77,12 +86,13 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 }
 
 func (a *StreamAccumulator) applyThinkingPart(text string) StreamPartDelta {
-	replay := sse.ResolveContinuationReplay(a.RawThinking.String(), text)
+	replay := a.rawThinkingReplay.Resolve(a.RawThinking.String(), text)
 	if replay.Dropped {
 		a.RawThinking.Reset()
 		a.RawThinking.WriteString(replay.Kept)
 		a.Thinking.Reset()
 		a.Thinking.WriteString(CleanVisibleOutput(replay.Kept, a.StripReferenceMarkers))
+		a.thinkingReplay.Reset()
 	}
 	if replay.Append == "" {
 		return StreamPartDelta{Type: "thinking", Replayed: replay.Dropped}
@@ -96,7 +106,7 @@ func (a *StreamAccumulator) applyThinkingPart(text string) StreamPartDelta {
 	if cleanedText == "" {
 		return delta
 	}
-	visible := sse.ResolveContinuationReplay(a.Thinking.String(), cleanedText)
+	visible := a.thinkingReplay.Resolve(a.Thinking.String(), cleanedText)
 	if visible.Append == "" {
 		return delta
 	}
@@ -106,12 +116,13 @@ func (a *StreamAccumulator) applyThinkingPart(text string) StreamPartDelta {
 }
 
 func (a *StreamAccumulator) applyTextPart(text string) StreamPartDelta {
-	replay := sse.ResolveContinuationReplay(a.RawText.String(), text)
+	replay := a.rawTextReplay.Resolve(a.RawText.String(), text)
 	if replay.Dropped {
 		a.RawText.Reset()
 		a.RawText.WriteString(replay.Kept)
 		a.Text.Reset()
 		a.Text.WriteString(CleanVisibleOutput(replay.Kept, a.StripReferenceMarkers))
+		a.textReplay.Reset()
 	}
 	if replay.Append == "" {
 		return StreamPartDelta{Type: "text", Replayed: replay.Dropped}
@@ -123,7 +134,7 @@ func (a *StreamAccumulator) applyTextPart(text string) StreamPartDelta {
 		return delta
 	}
 	cleanedText := CleanVisibleOutput(replay.Append, a.StripReferenceMarkers)
-	visible := sse.ResolveContinuationReplay(a.Text.String(), cleanedText)
+	visible := a.textReplay.Resolve(a.Text.String(), cleanedText)
 	if visible.Append == "" {
 		return delta
 	}

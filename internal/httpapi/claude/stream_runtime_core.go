@@ -39,6 +39,11 @@ type claudeStreamRuntime struct {
 	rawThinking           strings.Builder
 	toolDetectionThinking strings.Builder
 	toolCallsDetected     bool
+	// Continue rounds resend the message, possibly as many small deltas, so
+	// each raw stream keeps its own replay alignment.
+	rawTextReplay     sse.ReplayTracker
+	rawThinkingReplay sse.ReplayTracker
+	detectReplay      sse.ReplayTracker
 
 	nextBlockIndex     int
 	thinkingBlockOpen  bool
@@ -105,7 +110,7 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 
 	contentSeen := false
 	for _, p := range parsed.ToolDetectionThinkingParts {
-		trimmed := sse.TrimContinuationOverlapFromBuilder(&s.toolDetectionThinking, p.Text)
+		trimmed, _ := s.detectReplay.ApplyToBuilder(&s.toolDetectionThinking, p.Text)
 		if trimmed != "" {
 			s.toolDetectionThinking.WriteString(trimmed)
 		}
@@ -113,10 +118,10 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 	for _, p := range parsed.Parts {
 		var rawTrimmed string
 		if p.Type == "thinking" {
-			rawTrimmed = sse.TrimContinuationOverlapFromBuilder(&s.rawThinking, p.Text)
+			rawTrimmed, _ = s.rawThinkingReplay.ApplyToBuilder(&s.rawThinking, p.Text)
 		} else {
 			var rewound bool
-			rawTrimmed, rewound = sse.TrimContinuationReplayFromBuilder(&s.rawText, p.Text)
+			rawTrimmed, rewound = s.rawTextReplay.ApplyToBuilder(&s.rawText, p.Text)
 			if rewound {
 				// The upstream replayed a snapshot that diverged from the
 				// accumulated text, so the stale tail was dropped. Sieve state

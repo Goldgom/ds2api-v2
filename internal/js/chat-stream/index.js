@@ -38,6 +38,8 @@ const {
 const {
   trimContinuationOverlap,
   resolveContinuationReplay,
+  containsToolCallMarkup,
+  ReplayTracker,
 } = require('./dedupe');
 
 async function handler(req, res) {
@@ -127,4 +129,6 @@ module.exports.__test = {
   extractPathname,
   trimContinuationOverlap,
   resolveContinuationReplay,
+  containsToolCallMarkup,
+  ReplayTracker,
 };

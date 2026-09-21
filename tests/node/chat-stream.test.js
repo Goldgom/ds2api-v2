@@ -30,6 +30,7 @@ const {
   extractPathname,
   trimContinuationOverlap,
   resolveContinuationReplay,
+  ReplayTracker,
 } = handler.__test;
 
 function createMockResponse() {
@@ -383,6 +384,39 @@ test('vercel stream continues direct quasi_status incomplete before final tool c
 });
 
 
+
+test('vercel stream emits one tool call when a continue round replays token by token', async () => {
+  const block = '<tool_calls><invoke name="search"><parameter name="q">golang duplicate tool call replay</parameter></invoke></tool_calls>';
+  const message = `我先说明一下思路，然后给出调用：${block} 然后就结束了。`;
+  const replayLines = [];
+  for (let i = 0; i < message.length; i += 24) {
+    replayLines.push(`data: ${JSON.stringify({ p: 'response/content', v: message.slice(i, i + 24) })}\n\n`);
+  }
+  const { frames } = await runMockVercelStreamSequence([
+    [
+      `data: ${JSON.stringify({ response_message_id: 7, p: 'response/content', v: message })}\n\n`,
+      'data: {"p":"response/quasi_status","v":"INCOMPLETE"}\n\n',
+      'data: [DONE]\n\n',
+    ],
+    [
+      ...replayLines,
+      `data: ${JSON.stringify({ p: 'response/content', v: ' 后面是新增内容。' })}\n\n`,
+      'data: {"p":"response/status","v":"FINISHED"}\n\n',
+      'data: [DONE]\n\n',
+    ],
+  ], { tool_names: ['search'] });
+
+  const parsed = frames.filter((frame) => frame !== '[DONE]').map((frame) => JSON.parse(frame));
+  const calls = [];
+  for (const item of parsed) {
+    const delta = item.choices && item.choices[0] ? item.choices[0].delta : null;
+    if (delta && Array.isArray(delta.tool_calls)) {
+      calls.push(...delta.tool_calls);
+    }
+  }
+  assert.equal(calls.length, 1);
+  assert.ok(parsed.some((item) => String(item.choices?.[0]?.delta?.content || '').includes('后面是新增内容。')));
+});
 
 test('vercel stream usage completion_tokens does not double-count visible output', async () => {
   const sample = 'abcdefghijklmnopqrst';
@@ -976,4 +1010,53 @@ test('resolveContinuationReplay keeps one copy when the transport coalesces roun
     body += suffix;
   }
   assert.equal(accumulated, body);
+});
+
+test('ReplayTracker drops a token-sized replay of a message with a tool call', () => {
+  const block = '<tool_calls><invoke name="search"><parameter name="q">golang duplicate tool call replay</parameter></invoke></tool_calls>';
+  const message = `我先说明一下思路，然后给出调用：${block} 然后就结束了。`;
+  const tracker = new ReplayTracker();
+  let accumulated = message;
+  let dropped = false;
+  const chunks = [];
+  for (let i = 0; i < message.length; i += 24) {
+    chunks.push(message.slice(i, i + 24));
+  }
+  chunks.push(' 后面是新增内容。');
+  for (const chunk of chunks) {
+    const replay = tracker.resolve(accumulated, chunk);
+    dropped = dropped || replay.dropped;
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(dropped, true);
+  assert.equal(accumulated, `${message} 后面是新增内容。`);
+  assert.equal(accumulated.indexOf(block), accumulated.lastIndexOf(block));
+});
+
+test('ReplayTracker keeps legitimately repeated output', () => {
+  const tracker = new ReplayTracker();
+  let accumulated = '';
+  for (let i = 0; i < 40; i += 1) {
+    const replay = tracker.resolve(accumulated, '字'.repeat(16));
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(accumulated, '字'.repeat(640));
+});
+
+test('ReplayTracker keeps a markup chunk that is not followed by an aligned replay', () => {
+  const tracker = new ReplayTracker();
+  const head = '我们先看第一段说明文字，然后再给出工具调用：';
+  const block = '<tool_calls><invoke name="search"><parameter name="q">golang</parameter></invoke></tool_calls>';
+  let accumulated = head + block;
+  const candidate = head + '<tool_ca';
+  const first = tracker.resolve(accumulated, candidate);
+  accumulated = first.kept + first.append;
+  assert.equal(first.dropped, false);
+  assert.equal(accumulated.endsWith(candidate), true);
+
+  const second = tracker.resolve(accumulated, '这是一个完全不同的新内容片段。');
+  accumulated = second.kept + second.append;
+  assert.equal(second.dropped, false);
+  assert.equal(accumulated.endsWith('这是一个完全不同的新内容片段。'), true);
+  assert.equal(accumulated, head + block + candidate + '这是一个完全不同的新内容片段。');
 });

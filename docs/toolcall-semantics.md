@@ -130,6 +130,15 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 - 双方共享足够长的开头、但在其后分叉（上游重写了结尾）：保留共享开头，丢弃已累积文本里被重写掉的尾巴，只追加重写后的部分。此时 `Dropped` / `dropped` 为真，调用方必须同时重建由被丢弃文本派生的状态（工具 sieve）。
 - 传输层可能把上一轮尚未下发的增量与下一轮快照合并进同一个块：此时在块内部定位快照起点，块前缀属于快照已经包含的增量，直接丢弃，只保留快照的新尾巴。
 
+### 7.1 逐 token 重放的对齐
+
+`continue` 轮次还可能把整条消息**按 token 重新下发**，此时每个片段都短于 32 字，单块规则看不到任何快照特征，于是每个重放片段都会被当成新增量追加一遍——包括其中的工具标记，sieve 因此把同一段工具块解析成第二个调用，每多一个轮次就多一份。这段由 `sse.ReplayTracker`（Node 为 `ReplayTracker` 类）负责：
+
+- 触发条件必须是**工具标记**：片段包含 `<tool` / `invoke name` / `parameter name` / `tool_calls` / `EPSE` 等只在工具壳里出现的片段，且该片段在已累积文本中已经存在。合法重复输出（重复的表格行、连续相同字符）与"重放文本片段"在字节层面完全等价，所以纯文本片段永远不能作为重放证据。
+- 命中后记录对齐锚点（重放区起点）与期望偏移，下一个片段若**整块匹配**该偏移，就确认这是重放：把打开对齐时追加过的那个片段从累积文本里回退掉，并置 `Dropped` / `dropped`，让调用方重建 sieve 状态；之后的片段只要继续匹配同一偏移就直接丢弃，不再进入累积文本与 sieve。
+- 对齐过程中若出现分叉（偏移内部分匹配后转向新内容），保留共享开头、丢弃被改写的尾巴，只追加新尾巴；若完全不匹配，则结束对齐，该片段按普通增量处理。
+- 打开对齐的那个片段在确认前只是"候选"：确认失败时它保持已追加状态，因此误判不会造成内容丢失。代价是候选片段在被确认前已经送入 sieve，最多会有 32 字以内的片段重复出现在客户端的增量流里（累积文本、非流式结果与最终历史都已被回退修正）。
+
 流式 `tool_calls` 的 `index` 与 `id` 约定（Go / Node 一致）：
 
 - 同一条 assistant 消息内 `index` 全局递增，跨 `continue` 轮次接着已有 `index` 继续分配，`id` 按 `index` 复用且不在轮次之间清空。否则两个不同的调用会同时占用 `index: 0`，客户端按 index 合并后只会得到拼接坏的参数，或把同一个调用显示多遍。
@@ -139,8 +148,9 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 对应的回归测试：
 
 ```bash
-go test -v -run 'TestResolveContinuationReplay|TestApplyContinuationReplay' ./internal/sse/
+go test -v -run 'TestResolveContinuationReplay|TestApplyContinuationReplay|TestReplayTracker' ./internal/sse/
+go test -v -run 'TestCollectStreamDropsTokenSizedReplay' ./internal/sse/
 go test -v -run 'TestStreamAccumulatorReportsAndRewindsDivergedReplay' ./internal/httpapi/openai/shared/
-go test -v -run 'TestHandleStreamReplayedToolCallBlockEmitsOneCall|TestHandleStreamContinueRoundsDoNotDuplicateToolCalls|TestHandleStreamDivergedReplayKeepsSingleToolCall|TestHandleStreamKeepsIntentionallyRepeatedIdenticalCalls' ./internal/httpapi/openai/chat/
+go test -v -run 'TestHandleStreamReplayedToolCallBlockEmitsOneCall|TestHandleStreamTokenSizedReplayEmitsSingleToolCall|TestHandleStreamContinueRoundsDoNotDuplicateToolCalls|TestHandleStreamDivergedReplayKeepsSingleToolCall|TestHandleStreamKeepsIntentionallyRepeatedIdenticalCalls' ./internal/httpapi/openai/chat/
 node --test tests/node/chat-stream.test.js
 ```

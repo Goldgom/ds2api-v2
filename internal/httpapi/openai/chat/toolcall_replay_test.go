@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // DeepSeek resends the whole message as a snapshot when a continue round opens,
@@ -91,6 +92,19 @@ func toolCallIndex(t *testing.T, call map[string]any) float64 {
 	return index
 }
 
+func replayRunes(s string, n int) []string {
+	runes := []rune(s)
+	out := make([]string, 0, len(runes)/n+1)
+	for i := 0; i < len(runes); i += n {
+		end := i + n
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, string(runes[i:end]))
+	}
+	return out
+}
+
 func TestHandleStreamReplayedToolCallBlockEmitsOneCall(t *testing.T) {
 	message := "我先说明一下思路，然后给出调用：" + replayToolBlock
 	body := runReplayStream(t, []string{"search"},
@@ -108,6 +122,34 @@ func TestHandleStreamReplayedToolCallBlockEmitsOneCall(t *testing.T) {
 	}
 	if got := streamedDeltaContent(t, body); strings.Count(got, "我先说明一下思路") != 1 {
 		t.Fatalf("expected replayed content once, got %q", got)
+	}
+}
+
+// A continue round may resend the message token by token, so every replayed
+// fragment stays below the single-chunk snapshot floor of 32 runes.
+func TestHandleStreamTokenSizedReplayEmitsSingleToolCall(t *testing.T) {
+	message := "我先说明一下思路，然后给出调用：" + replayToolBlock + " 然后就结束了。"
+	lines := []string{replayContentLine(t, message)}
+	for _, chunk := range replayRunes(message, 24) {
+		lines = append(lines, replayContentLine(t, chunk))
+	}
+	lines = append(lines, replayContentLine(t, " 后面是新增内容。"))
+
+	body := runReplayStream(t, []string{"search"}, lines...)
+
+	calls := streamedToolCalls(t, body)
+	if len(calls) != 1 {
+		t.Fatalf("expected one tool call for a token-sized replay, got %d body=%s", len(calls), body)
+	}
+	content := streamedDeltaContent(t, body)
+	if !strings.Contains(content, "后面是新增内容。") {
+		t.Fatalf("expected the new content after the replay, got %q", content)
+	}
+	// The replayed fragments are dropped from the accumulated stream, so the
+	// replayed message body never reaches the client again. At most the single
+	// fragment that opened the alignment may have leaked before it was confirmed.
+	if extra := utf8.RuneCountInString(content) - utf8.RuneCountInString(message+" 后面是新增内容。"); extra > 31 {
+		t.Fatalf("expected at most one leaked fragment, got %d extra runes: %q", extra, content)
 	}
 }
 

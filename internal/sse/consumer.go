@@ -33,6 +33,9 @@ func CollectStream(resp *http.Response, thinkingEnabled bool, closeBody bool) Co
 	text := strings.Builder{}
 	thinking := strings.Builder{}
 	toolDetectionThinking := strings.Builder{}
+	var textReplay ReplayTracker
+	var thinkingReplay ReplayTracker
+	var detectReplay ReplayTracker
 	contentFilter := false
 	upstreamError := ""
 	stopped := false
@@ -74,13 +77,16 @@ func CollectStream(resp *http.Response, thinkingEnabled bool, closeBody bool) Co
 		}
 		for _, p := range result.Parts {
 			if p.Type == "thinking" {
-				thinking.WriteString(TrimContinuationOverlapFromBuilder(&thinking, p.Text))
+				trimmed, _ := thinkingReplay.ApplyToBuilder(&thinking, p.Text)
+				thinking.WriteString(trimmed)
 			} else {
-				text.WriteString(TrimContinuationOverlapFromBuilder(&text, p.Text))
+				trimmed, _ := textReplay.ApplyToBuilder(&text, p.Text)
+				text.WriteString(trimmed)
 			}
 		}
 		for _, p := range result.ToolDetectionThinkingParts {
-			toolDetectionThinking.WriteString(TrimContinuationOverlapFromBuilder(&toolDetectionThinking, p.Text))
+			trimmed, _ := detectReplay.ApplyToBuilder(&toolDetectionThinking, p.Text)
+			toolDetectionThinking.WriteString(trimmed)
 		}
 		return true
 	})
