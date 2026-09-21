@@ -108,3 +108,43 @@ func TestHelpersMeasureRepeats(t *testing.T) {
 		t.Fatalf("Preview with limit 0 = %q", got)
 	}
 }
+
+// Track counts overlapping streams that share a key (the prompt fingerprint), so
+// a duplicated turn can be pinned on the client instead of on this server.
+func TestTrackCountsOverlappingStreams(t *testing.T) {
+	ResetForTest()
+	defer ResetForTest()
+	t.Setenv(envVar, "")
+
+	if n, release := Track("prompt:abc"); n != 0 {
+		t.Fatalf("tracking must be inert while the trace is off, got %d", n)
+	} else {
+		release()
+	}
+
+	t.Setenv(envVar, filepath.Join(t.TempDir(), "trace.jsonl"))
+	ResetForTest()
+	n1, release1 := Track("prompt:abc")
+	if n1 != 1 {
+		t.Fatalf("first stream should count 1, got %d", n1)
+	}
+	n2, release2 := Track("prompt:abc")
+	if n2 != 2 {
+		t.Fatalf("overlapping stream should count 2, got %d", n2)
+	}
+	if got := Inflight("prompt:abc"); got != 2 {
+		t.Fatalf("Inflight = %d, want 2", got)
+	}
+	if n3, _ := Track("prompt:other"); n3 != 1 {
+		t.Fatalf("a different prompt must be counted separately, got %d", n3)
+	}
+	release1()
+	release1() // double release must not underflow
+	if got := Inflight("prompt:abc"); got != 1 {
+		t.Fatalf("Inflight after release = %d, want 1", got)
+	}
+	release2()
+	if got := Inflight("prompt:abc"); got != 0 {
+		t.Fatalf("Inflight after all releases = %d, want 0", got)
+	}
+}

@@ -412,12 +412,17 @@ DS2API_DEBUG_TOOLCALL=1 \
 
 追踪里记录（不保存正文，只有长度/短哈希/计数/限量预览）：
 
-- `request_start`：模型、thinking/search 开关、工具数量、是否要求必须调用工具
-- `part`：上游每个 part（`snapshot` / `roundStart` / 长度 / 哈希 / `invoke` 计数 / 与已累积文本的 `prefixMatch` 与 `interiorOffset` / 实际 `appendLen` / 是否 `dropped`）
-- `call_emitted` / `call_echo_skipped`：实际下发的调用（名称、参数哈希、`indexBase`、`replayEpoch`）
-- `finalize`：累计文本长度/哈希/`invoke` 与 wrapper 计数、可见正文长度、从正文解析出的调用数、已下发调用数、`finish_reason`
+- `request_start`：请求 id（`req`）、模型、**提示词指纹**（`promptHash` / `promptLen`）、**同一提示词同时在跑的流数**（`samePromptInFlight`）、**全进程同时在跑的流数**（`concurrentStreams`）、thinking/search 开关、工具数量、是否要求必须调用工具
+- `part`：上游每个 part（`req` / `snapshot` / `roundStart` / 长度 / 哈希 / `invoke` 计数 / 与已累积文本的 `prefixMatch` 与 `interiorOffset` / 实际 `appendLen` / 是否 `dropped`）
+- `call_emitted` / `call_echo_skipped`：实际下发的调用（`req`、名称、参数哈希、`indexBase`、`replayEpoch`）
+- `finalize`：`req`、`promptHash`、累计文本长度/哈希/`invoke` 与 wrapper 计数、可见正文长度、从正文解析出的调用数、已下发调用数、`finish_reason`
+- `stream_end`：`req` 的流结束标记（含累计长度、已下发调用数、`replayEpoch`）
 
-判读方法：`finalize.rawInvocations` 是「我们累积到的文本里到底有几个调用」。若它是期望值的两倍，再看 `part` 里是否存在 `appendLen > 0` 且（`prefixMatch > 0` 或 `interiorOffset >= 0`）的记录：有 → 是重放没被识别而重复追加（服务端问题）；没有 → 上游/模型自己把同一段写了两遍（客户端看到重复调用是如实透传）。
+判读方法（三步）：
+
+1. **先确认「重复」是谁产生的**：按 `req` 把记录分组。若同一个 `req` 下的 `part` 记录里出现了两套长度序列（例如一部分从 0 开始、另一部分已经 7000+ 且两者交替出现），说明**上游流被同一条请求消费了两次**；若两套序列分属**不同 `req`**，再去比较这两条 `request_start` 的 `promptHash`：相同且 `samePromptInFlight >= 2`（或 `concurrentStreams >= 2`）→ **客户端把同一轮请求并发发了两次**，两条响应各自都正确，重复是客户端合并出来的。
+2. **再看文本层**：`finalize.rawInvocations` 是「我们累积到的文本里到底有几个调用」。若它是期望值的两倍，再看 `part` 里是否存在 `appendLen > 0` 且（`prefixMatch > 0` 或 `interiorOffset >= 0`）的记录：有 → 是重放没被识别而重复追加（服务端问题）；没有 → 上游/模型自己把同一段写了两遍（客户端看到重复调用是如实透传）。
+3. **需要发给维护者的最小片段**：把 `request_start`、`call_emitted`、`call_echo_skipped`、`finalize`、`stream_end` 这几类记录发出来即可定位；只有在需要确认对齐时才附上出问题时间窗口内的 `part`/`line` 记录（它们现在都带 `req`，可以逐条对应到具体请求）。
 
 保存接口支持用 `query`、`chain_key` 或 `capture_id` 选中目标。例如：
 

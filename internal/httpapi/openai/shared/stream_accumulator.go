@@ -12,6 +12,10 @@ type StreamAccumulator struct {
 	SearchEnabled         bool
 	StripReferenceMarkers bool
 
+	// TraceID attributes every trace record to one client request. Without it
+	// interleaved streams from concurrent requests cannot be told apart.
+	TraceID string
+
 	RawThinking           strings.Builder
 	Thinking              strings.Builder
 	ToolDetectionThinking strings.Builder
@@ -52,6 +56,7 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 	trace := toolcalldebug.Enabled()
 	if trace {
 		toolcalldebug.Log("line", map[string]any{
+			"req":         a.TraceID,
 			"parts":       len(parsed.Parts),
 			"detectParts": len(parsed.ToolDetectionThinkingParts),
 			"rawTextLen":  a.RawText.Len(),
@@ -66,7 +71,7 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 			out.Replayed = true
 		}
 		if trace {
-			tracePart("detection_thinking", existing, p, permissive, trimmed, replayed)
+			tracePart(a.TraceID, "detection_thinking", existing, p, permissive, trimmed, replayed)
 		}
 		if trimmed != "" {
 			a.ToolDetectionThinking.WriteString(trimmed)
@@ -81,7 +86,7 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 				out.Replayed = true
 			}
 			if trace {
-				tracePart("raw_thinking", existing, p, permissive, delta.RawText, delta.Replayed)
+				tracePart(a.TraceID, "raw_thinking", existing, p, permissive, delta.RawText, delta.Replayed)
 			}
 			if delta.RawText != "" {
 				out.ContentSeen = true
@@ -98,7 +103,7 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 			out.Replayed = true
 		}
 		if trace {
-			tracePart("raw_text", existing, p, permissive, delta.RawText, delta.Replayed)
+			tracePart(a.TraceID, "raw_text", existing, p, permissive, delta.RawText, delta.Replayed)
 		}
 		if delta.RawText != "" {
 			out.ContentSeen = true
@@ -117,8 +122,9 @@ func (a *StreamAccumulator) Apply(parsed sse.LineResult) StreamAccumulatorResult
 // part also carries the tail of the previous round in front of it. A part that
 // duplicates text but appends it anyway is exactly how a replayed call block
 // reaches the sieve twice.
-func tracePart(channel, existing string, p sse.ContentPart, permissive bool, appendText string, dropped bool) {
+func tracePart(req, channel, existing string, p sse.ContentPart, permissive bool, appendText string, dropped bool) {
 	toolcalldebug.Log("part", map[string]any{
+		"req":             req,
 		"channel":         channel,
 		"type":            p.Type,
 		"snapshot":        p.Snapshot,

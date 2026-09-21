@@ -162,13 +162,15 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 
 ### 7.3 现场排查开关（`DS2API_DEBUG_TOOLCALL`）
 
-客户端报告「同一调用出现多次」时，不用先抓包：设 `DS2API_DEBUG_TOOLCALL=1`（或给文件/目录路径 / `stdout`）后重启，复现一次即可得到 `logs/toolcall-debug.jsonl`。它记录每轮的 `request_start`、每个 part 的 `snapshot`/`roundStart`/长度/哈希/`invoke` 计数/`prefixMatch`/`interiorOffset`/`appendLen`/`dropped`、每次 `call_emitted`/`call_echo_skipped`，以及 `finalize` 汇总（累计文本长度/哈希、`invoke` 与 wrapper 计数、从正文解析出的调用数、已下发调用数、`finish_reason`）。
+客户端报告「同一调用出现多次」时，不用先抓包：设 `DS2API_DEBUG_TOOLCALL=1`（或给文件/目录路径 / `stdout`）后重启，复现一次即可得到 `logs/toolcall-debug.jsonl`。它记录每轮的 `request_start`（含请求 id `req`、提示词指纹 `promptHash`/`promptLen`、同一提示词在跑的流数 `samePromptInFlight`、全进程在跑的流数 `concurrentStreams`）、每个 part 的 `req`/`snapshot`/`roundStart`/长度/哈希/`invoke` 计数/`prefixMatch`/`interiorOffset`/`appendLen`/`dropped`、每次 `call_emitted`/`call_echo_skipped`、`finalize` 汇总（`req`、`promptHash`、累计文本长度/哈希、`invoke` 与 wrapper 计数、从正文解析出的调用数、已下发调用数、`finish_reason`）以及 `stream_end` 结束标记。
 
 判读：
 
+- **先分请求再分文本**：所有 `line`/`part` 记录都带 `req`。同一个 `req` 内出现两套交替的长度序列 → 上游流被这一条请求消费了两次；两套序列分属不同 `req`，且两者 `promptHash` 相同、`samePromptInFlight >= 2`（或 `concurrentStreams >= 2`）→ **客户端把同一轮并发发了两次**，服务端每条响应都正确，重复是客户端合并出来的（服务端无法也不该跨请求去重）。
 - `finalize.rawInvocations` = 我们**累积到的文本**里有几个调用。等于期望值 → 重复不是文本层的，去看客户端的 `id`/`index` 是否相同；
 - 若为两倍，再看 `part` 记录：存在 `appendLen > 0` 且（`prefixMatch > 0` 或 `interiorOffset >= 0`）→ **重放没被识别而重复追加**（服务端缺陷，按该 part 的形状补去重）；
 - 若为两倍但没有任何 part 与已累积文本重合 → **上游/模型自己把同一段写了两遍**，属于如实透传，需要单独决定是否要按“同一 wrapper 内逐字节完全相同”丢弃。
+- 需要转发的**最小片段**：`request_start` / `call_emitted` / `call_echo_skipped` / `finalize` / `stream_end` 五类记录；只有要核对对齐时才附上问题时间窗口内的 `part`/`line`。
 
 对应的回归测试：
 
@@ -180,6 +182,9 @@ go test -v -run 'TestResolveContinuationReplay|TestApplyContinuationReplay|TestR
 go test -v -run 'TestCollectStreamDropsTokenSizedReplay' ./internal/sse/
 go test -v -run 'TestStreamAccumulator' ./internal/httpapi/openai/shared/
 go test -v -run 'TestStripLeakedToolCallWrapperBlocks' ./internal/httpapi/openai/shared/
+# 追踪本身的回归：每条记录必须带 req；并发同提示词的两条流必须报 samePromptInFlight=2 / concurrentStreams=2
+go test -v -run 'TestToolCallDebugTrace' ./internal/httpapi/openai/chat/
+go test -v -run 'TestTrackCountsOverlappingStreams' ./internal/toolcalldebug/
 # 端到端：全部调用形状 + 重放/续写/稳定形状
 #   含 good-call-after-malformed-block（畸形块后跟合法块不得泄漏其尾部标记）
 #   含 TestToolCallPerFragmentReplayEmitsEachCallOnce（按片段重放整条消息，同一批调用只能发射一次）

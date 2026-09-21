@@ -13,6 +13,7 @@ import (
 	"ds2api/internal/responsehistory"
 	"ds2api/internal/sse"
 	streamengine "ds2api/internal/stream"
+	"ds2api/internal/toolcalldebug"
 	"ds2api/internal/toolstream"
 )
 
@@ -85,7 +86,7 @@ func newResponsesStreamRuntime(
 	persistResponse func(obj map[string]any),
 	history *responsehistory.Session,
 ) *responsesStreamRuntime {
-	return &responsesStreamRuntime{
+	runtime := &responsesStreamRuntime{
 		w:                     w,
 		rc:                    rc,
 		canFlush:              canFlush,
@@ -112,11 +113,28 @@ func newResponsesStreamRuntime(
 		persistResponse:       persistResponse,
 		history:               history,
 		accumulator: shared.StreamAccumulator{
+			TraceID:               responseID,
 			ThinkingEnabled:       thinkingEnabled,
 			SearchEnabled:         searchEnabled,
 			StripReferenceMarkers: stripReferenceMarkers,
 		},
 	}
+	if toolcalldebug.Enabled() {
+		// The shared accumulator traces responses-surface streams too; without
+		// this marker a part record could not be attributed to a surface.
+		toolcalldebug.Log("request_start", map[string]any{
+			"req":                responseID,
+			"surface":            "responses",
+			"model":              model,
+			"promptHash":         toolcalldebug.Hash(finalPrompt),
+			"promptLen":          len(finalPrompt),
+			"traceID":            traceID,
+			"toolNames":          len(toolNames),
+			"toolsRawPresent":    toolsRaw != nil,
+			"toolChoiceRequired": toolChoice.IsRequired(),
+		})
+	}
+	return runtime
 }
 
 func (s *responsesStreamRuntime) failResponse(status int, message, code string) {

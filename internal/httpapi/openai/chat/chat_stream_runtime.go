@@ -57,6 +57,10 @@ type chatStreamRuntime struct {
 	responseMessageID int
 	upstreamErr       string
 
+	// traceRelease drops this stream from the tool-call trace in-flight
+	// registry. It is nil when the trace is off.
+	traceRelease func()
+
 	finalThinking     string
 	finalText         string
 	finalFinishReason string
@@ -109,21 +113,7 @@ func newChatStreamRuntime(
 	bufferToolContent bool,
 	emitEarlyToolDeltas bool,
 ) *chatStreamRuntime {
-	if toolcalldebug.Enabled() {
-		toolcalldebug.Log("request_start", map[string]any{
-			"req":                 completionID,
-			"model":               model,
-			"thinkingEnabled":     thinkingEnabled,
-			"searchEnabled":       searchEnabled,
-			"bufferToolContent":   bufferToolContent,
-			"emitEarlyToolDeltas": emitEarlyToolDeltas,
-			"toolNames":           len(toolNames),
-			"toolsRawPresent":     toolsRaw != nil,
-			"toolChoiceRequired":  toolChoice.IsRequired(),
-			"traceTarget":         toolcalldebug.Target(),
-		})
-	}
-	return &chatStreamRuntime{
+	runtime := &chatStreamRuntime{
 		w:                     w,
 		rc:                    rc,
 		canFlush:              canFlush,
@@ -148,6 +138,37 @@ func newChatStreamRuntime(
 			StripReferenceMarkers: stripReferenceMarkers,
 		},
 	}
+	if toolcalldebug.Enabled() {
+		// The prompt fingerprint plus the in-flight counters is what tells two
+		// concurrent requests with the same turn apart from one request whose
+		// upstream stream was consumed twice. The global counter stays useful
+		// when a client retry rewrites the prompt.
+		promptHash := toolcalldebug.Hash(finalPrompt)
+		inFlight, releasePrompt := toolcalldebug.Track("prompt:" + promptHash)
+		concurrent, releaseStream := toolcalldebug.Track("streams")
+		runtime.traceRelease = func() {
+			releasePrompt()
+			releaseStream()
+		}
+		runtime.accumulator.TraceID = completionID
+		toolcalldebug.Log("request_start", map[string]any{
+			"req":                 completionID,
+			"model":               model,
+			"promptHash":          promptHash,
+			"promptLen":           len(finalPrompt),
+			"samePromptInFlight":  inFlight,
+			"concurrentStreams":   concurrent,
+			"thinkingEnabled":     thinkingEnabled,
+			"searchEnabled":       searchEnabled,
+			"bufferToolContent":   bufferToolContent,
+			"emitEarlyToolDeltas": emitEarlyToolDeltas,
+			"toolNames":           len(toolNames),
+			"toolsRawPresent":     toolsRaw != nil,
+			"toolChoiceRequired":  toolChoice.IsRequired(),
+			"traceTarget":         toolcalldebug.Target(),
+		})
+	}
+	return runtime
 }
 
 func (s *chatStreamRuntime) sendKeepAlive() {
@@ -156,6 +177,26 @@ func (s *chatStreamRuntime) sendKeepAlive() {
 	}
 	_, _ = s.w.Write([]byte(": keep-alive\n\n"))
 	_ = s.rc.Flush()
+}
+
+// releaseTrace drops this stream from the trace in-flight registry. The
+// registration exists to spot concurrent requests that carry the same prompt,
+// so it has to be dropped even when the stream never reaches finalize.
+func (s *chatStreamRuntime) releaseTrace() {
+	if s.traceRelease == nil {
+		return
+	}
+	s.traceRelease()
+	s.traceRelease = nil
+	if toolcalldebug.Enabled() {
+		toolcalldebug.Log("stream_end", map[string]any{
+			"req":         s.completionID,
+			"rawTextLen":  s.accumulator.RawText.Len(),
+			"rawThinkLen": s.accumulator.RawThinking.Len(),
+			"toolCalls":   len(s.emittedCallEpoch),
+			"replayEpoch": s.replayEpoch,
+		})
+	}
 }
 
 func (s *chatStreamRuntime) sendChunk(v any) {
@@ -359,6 +400,7 @@ func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool)
 		rawText := s.accumulator.RawText.String()
 		toolcalldebug.Log("finalize", map[string]any{
 			"req":                s.completionID,
+			"promptHash":         toolcalldebug.Hash(s.finalPrompt),
 			"finishReason":       finishReason,
 			"rawTextLen":         len(rawText),
 			"rawTextHash":        toolcalldebug.Hash(rawText),
@@ -380,6 +422,7 @@ func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool)
 			"upstreamErr":        s.upstreamErr,
 		})
 	}
+	s.releaseTrace()
 	if outcome.ShouldFail {
 		status, message, code := outcome.Error.Status, outcome.Error.Message, outcome.Error.Code
 		if deferEmptyOutput {

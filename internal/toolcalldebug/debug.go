@@ -13,6 +13,12 @@
 //     their ids and indexes,
 //   - how many `invoke` blocks the accumulated text holds in total.
 //
+// Every record carries the client request id (`req`) plus a prompt fingerprint
+// and an in-flight counter at stream start, so interleaved streams can be
+// attributed: two records with the same `req` mean one request was consumed
+// twice, while two records with different `req`s and the same `promptHash` mean
+// the client sent the same turn concurrently.
+//
 // The trace never stores the message text itself: only lengths, short hashes,
 // counted invocations and bounded previews. It is meant to be sent as-is when a
 // duplicate-call report has to be pinned down without sharing a full capture.
@@ -57,6 +63,9 @@ var (
 	dropped   int
 	closed    bool
 	targetTxt string
+
+	inflightMu sync.Mutex
+	inflight   = map[string]int{}
 )
 
 // Enabled reports whether the trace is on. Cheap enough to call per event.
@@ -171,6 +180,45 @@ func Close() {
 	enabled.Store(false)
 }
 
+// Track registers one in-flight operation under key and returns how many
+// operations with that key are running now, this one included. The returned
+// release function must be called exactly once when the operation ends; it is
+// safe to call twice.
+//
+// The counter is what makes a duplicated tool call attributable: when two
+// concurrent requests carry the same prompt hash, the second stream start
+// reports sameKey > 1, so the duplicate can be pinned on the client re-sending
+// the turn instead of on this server replaying one upstream stream.
+func Track(key string) (int, func()) {
+	if key == "" || !Enabled() {
+		return 0, func() {}
+	}
+	inflightMu.Lock()
+	inflight[key]++
+	current := inflight[key]
+	inflightMu.Unlock()
+
+	var once sync.Once
+	return current, func() {
+		once.Do(func() {
+			inflightMu.Lock()
+			if inflight[key] <= 1 {
+				delete(inflight, key)
+			} else {
+				inflight[key]--
+			}
+			inflightMu.Unlock()
+		})
+	}
+}
+
+// Inflight reports how many operations are registered for key.
+func Inflight(key string) int {
+	inflightMu.Lock()
+	defer inflightMu.Unlock()
+	return inflight[key]
+}
+
 // ResetForTest restores the package to its pristine state so a test can point
 // the trace at a temporary file.
 func ResetForTest() {
@@ -182,6 +230,9 @@ func ResetForTest() {
 	closed = false
 	targetTxt = ""
 	writeMu.Unlock()
+	inflightMu.Lock()
+	inflight = map[string]int{}
+	inflightMu.Unlock()
 	initOnce = sync.Once{}
 	enabled.Store(false)
 }

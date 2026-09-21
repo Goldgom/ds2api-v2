@@ -243,6 +243,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, resp *htt
 		bufferToolContent,
 		emitEarlyToolDeltas,
 	)
+	defer streamRuntime.releaseTrace()
 	streamRuntime.refFileTokens = refFileTokens
 
 	streamengine.ConsumeSSE(streamengine.ConsumeConfig{
