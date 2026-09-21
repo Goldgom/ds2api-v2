@@ -1,7 +1,7 @@
 {
   "parts": [
-    {"text": "思考中", "type": "thinking"},
-    {"text": "结论", "type": "text"}
+    {"text": "思考中", "type": "thinking", "snapshot": true},
+    {"text": "结论", "type": "text", "snapshot": true}
   ],
   "finished": false,
   "new_type": "text"

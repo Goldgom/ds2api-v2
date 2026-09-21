@@ -44,11 +44,14 @@ func TestStartParsedLinePumpKeepsSnapshotChunkSeparate(t *testing.T) {
 	}
 }
 
-// Only the whole-message envelope is marked as a snapshot. Incremental content
-// and a batch of new fragments are ordinary parts.
-func TestStartParsedLinePumpMarksOnlyWholeMessageSnapshots(t *testing.T) {
+// Parts that carry whole fragment content are marked (both a `response` envelope
+// and a `response/fragments` batch); path deltas are ordinary increments. Only
+// the marked parts may open a replay alignment without tool-call markup, because
+// the upstream resends a message one fragment at a time and the fragment that
+// restarts it is often plain prose.
+func TestStartParsedLinePumpMarksWholeFragmentParts(t *testing.T) {
 	body := strings.Join([]string{
-		contentLine(t, "第一个片段"),
+		contentLine(t, "第一个增量"),
 		`data: {"p":"response/fragments","o":"APPEND","v":[{"id":2,"type":"RESPONSE","content":"第二个片段"}]}`,
 		snapshotLine(t, "第三个片段"),
 	}, "\n\n") + "\n\n"
@@ -65,23 +68,20 @@ func TestStartParsedLinePumpMarksOnlyWholeMessageSnapshots(t *testing.T) {
 	if len(parts) == 0 {
 		t.Fatalf("expected parts, got none")
 	}
-	marked := 0
-	var plain strings.Builder
+	marked := make([]string, 0, 2)
+	plain := make([]string, 0, 2)
 	for _, p := range parts {
 		if p.Snapshot {
-			marked++
-			if p.Text != "第三个片段" {
-				t.Fatalf("expected only the whole-message envelope to be marked, got %#v", p)
-			}
+			marked = append(marked, p.Text)
 			continue
 		}
-		plain.WriteString(p.Text)
+		plain = append(plain, p.Text)
 	}
-	if marked != 1 {
-		t.Fatalf("expected exactly one snapshot part, got %d: %#v", marked, parts)
+	if len(marked) != 2 || marked[0] != "第二个片段" || marked[1] != "第三个片段" {
+		t.Fatalf("expected the fragment batch and the envelope to be marked, got %#v (%#v)", marked, parts)
 	}
-	if got := plain.String(); got != "第一个片段第二个片段" {
-		t.Fatalf("expected the incremental parts unmarked, got %q", got)
+	if len(plain) != 1 || plain[0] != "第一个增量" {
+		t.Fatalf("expected the path delta to stay an increment, got %#v (%#v)", plain, parts)
 	}
 }
 

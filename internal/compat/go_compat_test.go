@@ -46,10 +46,16 @@ func TestGoCompatSSEFixtures(t *testing.T) {
 		res := sse.ParseDeepSeekContentLine(append([]byte("data: "), raw...), fixture.ThinkingEnable, fixture.CurrentType)
 		gotParts := make([]map[string]any, 0, len(res.Parts))
 		for _, p := range res.Parts {
-			gotParts = append(gotParts, map[string]any{
+			part := map[string]any{
 				"text": p.Text,
 				"type": p.Type,
-			})
+			}
+			// A part that carries whole fragment content instead of an increment
+			// is reported to the replay tracker, so the fixtures pin it as well.
+			if p.Snapshot {
+				part["snapshot"] = true
+			}
+			gotParts = append(gotParts, part)
 		}
 		if !reflect.DeepEqual(gotParts, expected.Parts) ||
 			res.Stop != expected.Finished ||

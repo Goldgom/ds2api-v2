@@ -197,6 +197,88 @@ func TestToolCallTruncatedMarkupStaysVisible(t *testing.T) {
 	}
 }
 
+// A continue round may resend the message one fragment at a time, each fragment
+// as its own whole-message state. The fragment that restarts the message is
+// often plain prose, and requiring tool markup in it left the alignment closed:
+// every later fragment was appended again, so all five calls reached the client
+// twice.
+func TestToolCallPerFragmentReplayEmitsEachCallOnce(t *testing.T) {
+	prose := "我先说明一下思路，然后依次给出这五个调用："
+	invokes := make([]string, 0, 5)
+	for i := 1; i <= 5; i++ {
+		marker := "TC" + string(rune('0'+i))
+		invokes = append(invokes, `<|EPSE|invoke name="shell">`+
+			`<|EPSE|parameter name="command"><![CDATA[echo "`+marker+`-$(date +%s%N)"]]></|EPSE|parameter>`+
+			`</|EPSE|invoke>`)
+	}
+	fragments := make([]map[string]any, 0, 6)
+	fragments = append(fragments, map[string]any{"id": 1, "type": "RESPONSE", "content": prose})
+	for i, invoke := range invokes {
+		block := invoke
+		if i == 0 {
+			block = "<|EPSE|tool_calls>" + block
+		}
+		if i == len(invokes)-1 {
+			block += "</|EPSE|tool_calls>"
+		}
+		fragments = append(fragments, map[string]any{"id": i + 2, "type": "RESPONSE", "content": block})
+	}
+
+	firstRound, err := json.Marshal(map[string]any{"p": "response/fragments", "o": "APPEND", "v": fragments})
+	if err != nil {
+		t.Fatalf("marshal fragment batch failed: %v", err)
+	}
+
+	deliveries := map[string]func(t *testing.T, frag map[string]any) string{
+		"whole-message-envelope": func(t *testing.T, frag map[string]any) string {
+			t.Helper()
+			line, err := json.Marshal(map[string]any{"v": map[string]any{"response": map[string]any{"fragments": []any{frag}}}})
+			if err != nil {
+				t.Fatalf("marshal snapshot line failed: %v", err)
+			}
+			return "data: " + string(line)
+		},
+		"fragment-batch": func(t *testing.T, frag map[string]any) string {
+			t.Helper()
+			line, err := json.Marshal(map[string]any{"p": "response/fragments", "o": "APPEND", "v": []any{frag}})
+			if err != nil {
+				t.Fatalf("marshal fragment line failed: %v", err)
+			}
+			return "data: " + string(line)
+		},
+	}
+
+	for name, deliver := range deliveries {
+		t.Run(name, func(t *testing.T) {
+			lines := []string{"data: " + string(firstRound)}
+			for _, fragment := range fragments {
+				lines = append(lines, deliver(t, fragment))
+			}
+
+			body := runReplayStream(t, []string{"shell"}, lines...)
+			calls := streamedToolCalls(t, body)
+			if len(calls) != 5 {
+				t.Fatalf("expected 5 tool calls, got %d body=%s", len(calls), body)
+			}
+			seenIndexes := map[float64]bool{}
+			for _, call := range calls {
+				if seenIndexes[toolCallIndex(t, call)] {
+					t.Fatalf("expected distinct indexes, got %v body=%s", seenIndexes, body)
+				}
+				seenIndexes[toolCallIndex(t, call)] = true
+				fn, _ := call["function"].(map[string]any)
+				args := asString(fn["arguments"])
+				if !json.Valid([]byte(args)) {
+					t.Fatalf("call arguments are not valid JSON: %q body=%s", args, body)
+				}
+			}
+			if reason := streamFinishReason(mustFrames(t, body)); reason != "tool_calls" {
+				t.Fatalf("expected finish_reason=tool_calls, got %q body=%s", reason, body)
+			}
+		})
+	}
+}
+
 // Degraded but recoverable markup is repaired on a best-effort basis: the call
 // is reported even though the model omitted quotes or used the canonical
 // parameter form inside an extended wrapper.

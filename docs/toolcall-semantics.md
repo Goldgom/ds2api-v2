@@ -131,22 +131,23 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 
 上游重发的整条消息状态是**结构化识别**的，不靠文本猜测：
 
-- 解析层给这类整消息信封打标（Go `sse.ContentPart.Snapshot`，只由 `appendWrappedFragments` 置位；`response/content` 增量与 `response/fragments` 新增片段不打标）。
-- 传输层（行泵）把快照块**单独成块**：遇到快照先冲刷已缓冲的增量，再单独冲刷快照。这样增量与快照不会合并成一块，消费方不需要再去猜“重放是否从块内某个偏移开始”。
+- 解析层区分两类 part：**整片段内容**（`{"v":{...,"fragments":[...]}}` 整消息信封，以及 `p=response/fragments, o=APPEND` 的新增片段批次）与**增量**（`response/content`、`response/fragments/-1/content` 等路径增量）。前者在 Go 里置 `sse.ContentPart.Snapshot`，在 Node 里为 `snapshot: true`。
+- 传输层（行泵）把整片段 part **单独成块**：遇到它先冲刷已缓冲的增量，再单独冲刷它。这样增量与片段不会合并成一块，消费方不需要再去猜“重放是否从块内某个偏移开始”。
 - 因此“上一轮尾部增量 + 下一轮整消息快照”这类真实序列会被自然拆成两块：增量按新增内容追加（正确），快照则命中上面的前缀/相等规则（要么丢掉，要么只追加新尾巴）。
 
 一个仍然存在的边界：如果上游**重新渲染**了整条消息、导致共享开头之后的尾部与已下发内容不同（目前没有实测样本），这段状态只能被追加上去——已下发给客户端的内容无法撤回。此时客户端会再看到一次被重放的正文，并可能收到第二个内容完全正确的调用（新的 `id`、新的 `index`，参数合法）；这是刻意选择的安全方向：宁可多一个可去重的调用，也不产出参数错位的调用。
 
-### 7.1 逐 token 重放的对齐
+### 7.1 逐 part 重放的对齐
 
-`continue` 轮次还可能把整条消息**按 token 重新下发**，此时每个片段都短于 32 字，单块规则看不到任何快照特征，于是每个重放片段都会被当成新增量追加一遍——包括其中的工具标记，sieve 因此把同一段工具块解析成第二个调用，每多一个轮次就多一份。这段由 `sse.ReplayTracker`（Node 为 `ReplayTracker` 类）负责：
+`continue` 轮次重发消息的方式可能是：整消息一大块、**每个片段一块**（信封或 `response/fragments` 批次）、甚至**按 token 逐段**下发。后两种情况下每一块都短于 32 字（或不是整条消息），单块规则看不到快照特征，于是每个重放块都会被当成新增量追加一遍——包括其中的工具标记，sieve 因此把同一段工具块解析成第二个调用，每多一个轮次就多一份。这段由 `sse.ReplayTracker`（Node 为 `ReplayTracker` 类）负责：
 
-- 开对齐的证据只有两条，且必须同时成立：片段**重启整条消息**（是已累积文本的前缀），且片段包含**工具标记**（`<tool` / `invoke name` / `parameter name` / `tool_calls` / `EPSE` 等）。
+- 开对齐的证据：片段**重启整条消息**（是已累积文本的前缀）+ 长度达到 `minReplayCandidateRunes`（8 字）。另外，**普通增量**还必须含**工具标记**（`<tool` / `invoke name` / `parameter name` / `tool_calls` / `EPSE` 等），而**整片段 part** 可以不含。
+- “普通增量必须含工具标记”这条不能去掉：模型合法重复输出（连续相同的字、重复的表格行、重复的参数块）与重放的正文片段在字节层完全等价，一律放行就会把正文重复误判成重放。
+- “整片段 part 可以不含工具标记”同样不能去掉：上游常常**按片段重放整条消息**，而重启消息的那个片段往往只是正文；若它不能开对齐，后面每个片段（带着工具调用）都会被重新追加，客户端就会把同一批调用收到两遍。
 - **不接受“片段出现在已累积文本中间”作为证据**：`displayName` 与 `intent` 取值相同、多个调用复用同一段参数文本时，中间命中会立刻误判；一旦误判并确认，回退与分叉处理会把累积文本切碎，造成与上面同样的参数错位/调用丢失。
 - 命中后记录对齐锚点与期望偏移，下一个片段若**整块匹配**该偏移，就确认这是重放：把打开对齐时追加过的那个片段从累积文本里回退掉，并置 `Dropped` / `dropped`，让调用方重建 sieve 状态；之后的片段只要继续匹配同一偏移就直接丢弃，不再进入累积文本与 sieve。
 - 对齐过程中若出现分叉：**只丢弃已经确认重复的那段前缀**（它本来就在累积文本里），累积文本本身保持不动，其余部分照常追加；若完全不匹配则结束对齐，该片段按普通增量处理。任何情况下都不会为了“猜是重放”而裁掉已累积内容。
-- 打开对齐的那个片段在确认前只是“候选”：确认失败时它保持已追加状态，因此误判不会造成内容丢失。代价是候选片段在被确认前已经送入 sieve，最多会有 32 字以内的片段重复出现在客户端的增量流里（累积文本、非流式结果与最终历史都已被回退修正）。
-- 纯文本重放（片段里不含任何工具标记）不做对齐：它与模型合法重复输出在字节层完全等价，宁可保留重复也不冒切碎正文的风险。
+- 打开对齐的那个片段在确认前只是“候选”：确认失败时它保持已追加状态，因此误判不会造成内容丢失（代价是候选片段在被确认前已送入 sieve，最多 32 字以内的片段重复出现在客户端的增量流里）。
 
 流式 `tool_calls` 的 `index` 与 `id` 约定（Go / Node 一致）：
 
@@ -161,9 +162,8 @@ go test -v -run 'TestParseToolCalls|TestProcessToolSieve' ./internal/toolcall ./
 对应的回归测试：
 
 ```bash
-# 重放识别与对齐（含相似工具调用不得被切碎）
-# 叠加：
-#   行泵必须把快照块单独投递（TestStartParsedLinePump*），
+# 重放识别与对齐（含相似工具调用不得被切碎、按片段重放不得重复发射）
+#   叠加：行泵必须把整片段 part 单独投递（TestStartParsedLinePump*），
 #   已累积文本永不被裁剪（TestResolveContinuationReplayNeverCutsAccumulatedText）。
 go test -v -run 'TestResolveContinuationReplay|TestApplyContinuationReplay|TestReplayTracker|TestStartParsedLinePump' ./internal/sse/
 go test -v -run 'TestCollectStreamDropsTokenSizedReplay' ./internal/sse/
@@ -171,6 +171,7 @@ go test -v -run 'TestStreamAccumulator' ./internal/httpapi/openai/shared/
 go test -v -run 'TestStripLeakedToolCallWrapperBlocks' ./internal/httpapi/openai/shared/
 # 端到端：全部调用形状 + 重放/续写/稳定形状
 #   含 good-call-after-malformed-block（畸形块后跟合法块不得泄漏其尾部标记）
-go test -v -run 'TestToolCallShapes|TestToolCallStabilityRisks|TestToolCallUnparseableMarkupStaysVisible|TestToolCallTruncatedMarkupStaysVisible|TestToolCallDegradedMarkupIsRepaired|TestHandleStreamReplayedToolCallBlockEmitsOneCall|TestHandleStreamTokenSizedReplayEmitsSingleToolCall|TestHandleStreamContinueRoundsDoNotDuplicateToolCalls|TestHandleStreamDivergedReplayKeepsEveryCallValid|TestHandleStreamKeepsIntentionallyRepeatedIdenticalCalls|TestHandleStreamSimilarToolCallsKeepTheirOwnArguments' ./internal/httpapi/openai/chat/
+#   含 TestToolCallPerFragmentReplayEmitsEachCallOnce（按片段重放整条消息，同一批调用只能发射一次）
+go test -v -run 'TestToolCallShapes|TestToolCallStabilityRisks|TestToolCallUnparseableMarkupStaysVisible|TestToolCallTruncatedMarkupStaysVisible|TestToolCallDegradedMarkupIsRepaired|TestToolCallPerFragmentReplayEmitsEachCallOnce|TestHandleStreamReplayedToolCallBlockEmitsOneCall|TestHandleStreamTokenSizedReplayEmitsSingleToolCall|TestHandleStreamContinueRoundsDoNotDuplicateToolCalls|TestHandleStreamDivergedReplayKeepsEveryCallValid|TestHandleStreamKeepsIntentionallyRepeatedIdenticalCalls|TestHandleStreamSimilarToolCallsKeepTheirOwnArguments' ./internal/httpapi/openai/chat/
 node --test tests/node/chat-stream.test.js
 ```

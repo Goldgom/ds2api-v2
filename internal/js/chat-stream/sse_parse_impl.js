@@ -28,14 +28,14 @@ function splitThinkingParts(parts) {
     if (thinkingDone && p.type === 'thinking') {
       const cleaned = stripThinkTags(p.text);
       if (cleaned) {
-        out.push({ text: cleaned, type: 'text' });
+        out.push({ ...p, text: cleaned, type: 'text' });
       }
       continue;
     }
     if (p.type !== 'thinking') {
       const cleaned = stripThinkTags(p.text);
       if (cleaned) {
-        out.push({ text: cleaned, type: p.type });
+        out.push({ ...p, text: cleaned });
       }
       continue;
     }
@@ -48,11 +48,11 @@ function splitThinkingParts(parts) {
     const before = p.text.substring(0, match.index);
     let after = p.text.substring(match.index + match[0].length);
     if (before) {
-      out.push({ text: before, type: 'thinking' });
+      out.push({ ...p, text: before, type: 'thinking' });
     }
     after = stripThinkTags(after);
     if (after) {
-      out.push({ text: after, type: 'text' });
+      out.push({ ...p, text: after, type: 'text' });
     }
   }
   return { parts: out, transitioned: thinkingDone };
@@ -188,12 +188,12 @@ function parseChunkForContent(chunk, thinkingEnabled, currentType, stripReferenc
       }
       if (fragType === 'THINK' || fragType === 'THINKING') {
         newType = 'thinking';
-        parts.push({ text: content, type: 'thinking' });
+        parts.push({ text: content, type: 'thinking', snapshot: true });
       } else if (fragType === 'RESPONSE') {
         newType = 'text';
-        parts.push({ text: content, type: 'text' });
+        parts.push({ text: content, type: 'text', snapshot: true });
       } else {
-        parts.push({ text: content, type: 'text' });
+        parts.push({ text: content, type: 'text', snapshot: true });
       }
     }
   }
@@ -331,15 +331,18 @@ function parseChunkForContent(chunk, thinkingEnabled, currentType, stripReferenc
         if (!content) {
           continue;
         }
+        // A whole message state the upstream re-sent (see the Go parser's
+        // ContentPart.Snapshot): it may be a replayed fragment batch whose head
+        // carries no tool markup, so the replay tracker has to be told.
         const t = asString(frag.type).toUpperCase();
         if (t === 'THINK' || t === 'THINKING') {
           newType = 'thinking';
-          parts.push({ text: content, type: 'thinking' });
+          parts.push({ text: content, type: 'thinking', snapshot: true });
         } else if (t === 'RESPONSE') {
           newType = 'text';
-          parts.push({ text: content, type: 'text' });
+          parts.push({ text: content, type: 'text', snapshot: true });
         } else {
-          parts.push({ text: content, type: partType });
+          parts.push({ text: content, type: partType, snapshot: true });
         }
       }
     }

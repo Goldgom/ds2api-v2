@@ -50,7 +50,7 @@ const TOOL_MARKUP_HINTS = [
   '<parameter', '</parameter', 'parameter name', 'parameter|name',
 ];
 
-const MIN_REPLAY_MARKUP_LEN = 8;
+const MIN_REPLAY_CANDIDATE_LEN = 8;
 
 function containsToolCallMarkup(text) {
   if (!text) {
@@ -82,6 +82,17 @@ class ReplayTracker {
   }
 
   resolve(existing, incoming) {
+    return this.resolveChunk(existing, incoming, false);
+  }
+
+  // resolveSnapshot handles a part that carries a whole message state: it may be
+  // a replayed fragment batch whose head has no tool markup, so a markup-free
+  // head may open an alignment here.
+  resolveSnapshot(existing, incoming) {
+    return this.resolveChunk(existing, incoming, true);
+  }
+
+  resolveChunk(existing, incoming, snapshot) {
     const current = typeof existing === 'string' ? existing : '';
     if (!incoming) {
       return { kept: current, append: '', dropped: false };
@@ -97,7 +108,7 @@ class ReplayTracker {
       }
     }
     const replay = resolveContinuationReplay(current, incoming);
-    this.openAlignment(current, incoming, replay);
+    this.openAlignment(current, incoming, replay, snapshot);
     return replay;
   }
 
@@ -141,17 +152,24 @@ class ReplayTracker {
   // false one are costly and the two are hard to tell apart in text:
   //
   //   - the chunk must restart the message, i.e. be a prefix of the accumulated
-  //     text. A continue round that resends the message token by token always
-  //     starts that way.
-  //   - it must carry tool-call markup. Legitimately repeated output is
-  //     byte-identical to a replayed text fragment, so plain text can never be a
-  //     replay on its own - and neither can markup that merely appears somewhere
-  //     inside the message, which is why matching an interior offset is not
-  //     accepted here.
+  //     text. A continue round that resends the message always starts that way,
+  //     whether it resends it as one snapshot or as one part per fragment.
+  //   - it must be long enough to align on.
+  //   - an ordinary increment must also carry tool-call markup: legitimately
+  //     repeated output is byte-identical to a replayed prose fragment, so plain
+  //     deltas can never be a replay on their own. A part that carries a whole
+  //     message state may: the upstream resends the message one fragment at a
+  //     time and the calls only appear in the later fragments, so refusing to
+  //     align on a markup-free head would let every later fragment be appended
+  //     again - the same call would be emitted twice.
+  //
+  // Matching an interior offset is not accepted (a chunk that only appears
+  // somewhere inside the message), because a confirmed alignment rewinds the
+  // accumulated text.
   //
   // A chunk that was appended verbatim stays appended until the next chunk
   // confirms the replay, so a false candidate costs nothing.
-  openAlignment(existing, incoming, replay) {
+  openAlignment(existing, incoming, replay, snapshot) {
     if (replay.dropped) {
       return;
     }
@@ -160,7 +178,10 @@ class ReplayTracker {
     if (!appendVerbatim && !droppedWhole) {
       return;
     }
-    if (incoming.length < MIN_REPLAY_MARKUP_LEN || !containsToolCallMarkup(incoming)) {
+    if (incoming.length < MIN_REPLAY_CANDIDATE_LEN) {
+      return;
+    }
+    if (!snapshot && !containsToolCallMarkup(incoming)) {
       return;
     }
     if (!existing.startsWith(incoming)) {

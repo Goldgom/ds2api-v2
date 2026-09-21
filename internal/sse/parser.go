@@ -12,13 +12,13 @@ import (
 type ContentPart struct {
 	Text string
 	Type string
-	// Snapshot marks a part that carries a whole message state the upstream
-	// re-sent - a `response` envelope with whole fragments - instead of an
-	// incremental delta. Only such a part may be treated as a re-rendering of
-	// the text that was already accumulated: an ordinary delta that merely
-	// shares a textual prologue with it (the next tool-call block of a message
-	// that repeats the same markup) is new content, and treating it as a replay
-	// cuts the accumulated text apart.
+	// Snapshot marks a part that carries whole fragment content - a `response`
+	// envelope with fragments, or a `response/fragments` batch of new fragments -
+	// rather than an incremental delta. Only such a part may be treated as a
+	// re-rendering of the text that was already accumulated: an ordinary delta
+	// that merely shares a textual prologue with it (the next tool-call block of a
+	// message that repeats the same markup) is new content, and treating it as a
+	// replay cuts the accumulated text apart.
 	Snapshot bool
 }
 
@@ -171,12 +171,12 @@ func collectDirectFragments(path string, chunk map[string]any, v any, newType *s
 		switch typeName {
 		case "THINK", "THINKING":
 			*newType = "thinking"
-			appendContentPart(parts, content, "thinking")
+			appendContentPartWithSnapshot(parts, content, "thinking", true)
 		case "RESPONSE":
 			*newType = "text"
-			appendContentPart(parts, content, "text")
+			appendContentPartWithSnapshot(parts, content, "text", true)
 		default:
-			appendContentPart(parts, content, "text")
+			appendContentPartWithSnapshot(parts, content, "text", true)
 		}
 	}
 }

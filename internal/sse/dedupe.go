@@ -12,10 +12,11 @@ import (
 const minContinuationSnapshotLen = 32
 
 const (
-	// minReplayMarkupRunes is the smallest chunk carrying tool-call markup that
-	// may open an alignment. Tool-call markup is split freely by the upstream,
-	// so these fragments have to be recognised below the snapshot floor as well.
-	minReplayMarkupRunes = 8
+	// minReplayCandidateRunes is the smallest chunk that may open an alignment.
+	// The upstream splits a replayed message freely - a snapshot into fragments,
+	// a fragment into tokens - so a replay is often delivered as many parts that
+	// all stay below the snapshot floor.
+	minReplayCandidateRunes = 8
 )
 
 // toolMarkupHints are fragments that only ever occur inside tool-call markup.
@@ -168,6 +169,21 @@ func (t *ReplayTracker) Reset() {
 
 // Resolve decides how much of an incoming chunk is new.
 func (t *ReplayTracker) Resolve(existing, incoming string) ContinuationReplay {
+	return t.ResolveChunk(existing, incoming, false)
+}
+
+// ResolveSnapshot decides how much of an incoming whole-message state is new.
+//
+// Such a part may be a replayed fragment batch whose head carries no tool-call
+// markup: the upstream resends the message one fragment at a time, and the
+// calls only appear in the later fragments.
+func (t *ReplayTracker) ResolveSnapshot(existing, incoming string) ContinuationReplay {
+	return t.ResolveChunk(existing, incoming, true)
+}
+
+// ResolveChunk decides how much of an incoming chunk is new. snapshot reports
+// that the chunk carries a whole message state (see ContentPart.Snapshot).
+func (t *ReplayTracker) ResolveChunk(existing, incoming string, snapshot bool) ContinuationReplay {
 	if t == nil {
 		return ResolveContinuationReplay(existing, incoming)
 	}
@@ -184,7 +200,7 @@ func (t *ReplayTracker) Resolve(existing, incoming string) ContinuationReplay {
 		}
 	}
 	replay := ResolveContinuationReplay(existing, incoming)
-	t.openAlignment(existing, incoming, replay)
+	t.openAlignment(existing, incoming, replay, snapshot)
 	return replay
 }
 
@@ -224,25 +240,33 @@ func (t *ReplayTracker) followReplay(existing, incoming string) (ContinuationRep
 	return ContinuationReplay{}, false
 }
 
-// openAlignment starts an alignment when incoming looks like a replayed fragment
-// of a message the upstream already sent.
+// openAlignment starts an alignment when incoming looks like the first part of a
+// message the upstream is resending.
 //
 // The evidence is deliberately narrow, because both a missed replay and a false
 // one are costly and the two are hard to tell apart in text:
 //
 //   - the chunk must restart the message, i.e. it must be a prefix of the
-//     accumulated text. A `continue` round that resends the message token by
-//     token always starts that way.
-//   - it must carry tool-call markup. Legitimately repeated output (a repeated
-//     table row, a run of identical characters, a repeated parameter block) is
-//     byte-identical to a replayed text fragment, so plain text can never be
-//     treated as a replay on its own - and neither can markup that merely
-//     appears somewhere inside the message, which is why matching an interior
-//     offset is not accepted here.
+//     accumulated text. A `continue` round that resends the message always
+//     starts that way, whether it resends it as one snapshot or as one part per
+//     fragment.
+//   - it must be long enough to align on (`minReplayCandidateRunes`).
+//   - an ordinary increment must also carry tool-call markup. Legitimately
+//     repeated output (a run of identical characters, a repeated table row, a
+//     repeated parameter block) is byte-identical to a replayed prose fragment,
+//     so plain deltas can never be treated as a replay on their own. A part that
+//     carries a whole message state may: the upstream resends the message one
+//     fragment at a time and the calls only appear in the later fragments, so
+//     refusing to align on a markup-free head would let every later fragment be
+//     appended again - which is how the same call gets emitted twice.
 //
-// Chunks that were appended verbatim stay appended until the next chunk
+// Matching an interior offset is not accepted either (a chunk that only appears
+// somewhere inside the message): repeated parameter text inside one message
+// triggers that, and a confirmed alignment rewinds the accumulated text.
+//
+// A chunk that was appended verbatim stays appended until the next chunk
 // confirms the replay, so a false candidate costs nothing.
-func (t *ReplayTracker) openAlignment(existing, incoming string, replay ContinuationReplay) {
+func (t *ReplayTracker) openAlignment(existing, incoming string, replay ContinuationReplay, snapshot bool) {
 	if replay.Dropped {
 		return
 	}
@@ -251,7 +275,10 @@ func (t *ReplayTracker) openAlignment(existing, incoming string, replay Continua
 	if !appendVerbatim && !droppedWhole {
 		return
 	}
-	if utf8.RuneCountInString(incoming) < minReplayMarkupRunes || !containsToolCallMarkup(incoming) {
+	if utf8.RuneCountInString(incoming) < minReplayCandidateRunes {
+		return
+	}
+	if !snapshot && !containsToolCallMarkup(incoming) {
 		return
 	}
 	if !strings.HasPrefix(existing, incoming) {
@@ -263,11 +290,12 @@ func (t *ReplayTracker) openAlignment(existing, incoming string, replay Continua
 
 // ApplyToBuilder resolves incoming against existing, rewinding existing when the
 // replay invalidated the tail it already held, and returns the text to append.
-func (t *ReplayTracker) ApplyToBuilder(existing *strings.Builder, incoming string) (appendText string, dropped bool) {
+// snapshot reports that incoming carries a whole message state.
+func (t *ReplayTracker) ApplyToBuilder(existing *strings.Builder, incoming string, snapshot bool) (appendText string, dropped bool) {
 	if existing == nil {
 		return incoming, false
 	}
-	replay := t.Resolve(existing.String(), incoming)
+	replay := t.ResolveChunk(existing.String(), incoming, snapshot)
 	if replay.Dropped {
 		existing.Reset()
 		existing.WriteString(replay.Kept)

@@ -686,9 +686,11 @@ test('parseChunkForContent handles response/fragments APPEND with thinking and r
   const parsed = parseChunkForContent(chunk, true, 'thinking');
   assert.equal(parsed.finished, false);
   assert.equal(parsed.newType, 'text');
+  // Fragment-carried content is a whole state, not an increment: the replay
+  // tracker needs to know that to align a per-fragment replay.
   assert.deepEqual(parsed.parts, [
-    { text: '思考中', type: 'thinking' },
-    { text: '结论', type: 'text' },
+    { text: '思考中', type: 'thinking', snapshot: true },
+    { text: '结论', type: 'text', snapshot: true },
   ]);
 });
 
@@ -762,7 +764,7 @@ test('parseChunkForContent strips citation and reference markers from fragment c
   };
   const parsed = parseChunkForContent(chunk, false, 'text');
   assert.equal(parsed.finished, false);
-  assert.deepEqual(parsed.parts, [{ text: '广州天气   多云', type: 'text' }]);
+  assert.deepEqual(parsed.parts, [{ text: '广州天气   多云', type: 'text', snapshot: true }]);
 });
 
 test('parseChunkForContent strips leaked thought control markers from content', () => {
@@ -1107,4 +1109,46 @@ test('ReplayTracker keeps a markup chunk that is not followed by an aligned repl
   assert.equal(second.dropped, false);
   assert.equal(accumulated.endsWith('这是一个完全不同的新内容片段。'), true);
   assert.equal(accumulated, head + block + candidate + '这是一个完全不同的新内容片段。');
+});
+
+// A continue round may resend the message one fragment at a time. The fragment
+// that restarts the message is often plain prose; if a markup-free head could
+// not open an alignment, every later fragment - including the ones carrying the
+// tool calls - would be appended again and the calls would be emitted twice.
+test('ReplayTracker drops a per-fragment replay whose head has no tool markup', () => {
+  const wrapper = '<|EPSE|tool_calls><|EPSE|invoke name="shell"><|EPSE|parameter name="command"><![CDATA[echo one]]></|EPSE|parameter></|EPSE|invoke></|EPSE|tool_calls>';
+  const prose = '我先说明一下思路，然后给出调用：';
+  const fragments = [prose, wrapper];
+
+  const tracker = new ReplayTracker();
+  let accumulated = '';
+  for (const fragment of fragments) {
+    const replay = tracker.resolveSnapshot(accumulated, fragment);
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(accumulated, prose + wrapper);
+
+  // Round 2: the same fragments are resent, each one as its own whole state.
+  let dropped = 0;
+  for (const fragment of fragments) {
+    const replay = tracker.resolveSnapshot(accumulated, fragment);
+    if (replay.dropped) {
+      dropped += 1;
+    }
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(dropped > 0, true, 'expected the replay to be recognised');
+  assert.equal(accumulated, prose + wrapper, 'the replay must not be appended again');
+});
+
+// The same head fragment delivered as an ordinary delta may not open an
+// alignment: a stream of legitimately repeated chunks looks exactly like that.
+test('ReplayTracker keeps plain deltas that merely repeat the message head', () => {
+  const tracker = new ReplayTracker();
+  let accumulated = '';
+  for (let i = 0; i < 40; i += 1) {
+    const replay = tracker.resolveChunk(accumulated, '字'.repeat(16), false);
+    accumulated = replay.kept + replay.append;
+  }
+  assert.equal(accumulated, '字'.repeat(640));
 });

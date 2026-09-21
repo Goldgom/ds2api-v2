@@ -77,15 +77,15 @@ func CollectStream(resp *http.Response, thinkingEnabled bool, closeBody bool) Co
 		}
 		for _, p := range result.Parts {
 			if p.Type == "thinking" {
-				trimmed, _ := thinkingReplay.ApplyToBuilder(&thinking, p.Text)
+				trimmed, _ := thinkingReplay.ApplyToBuilder(&thinking, p.Text, p.Snapshot)
 				thinking.WriteString(trimmed)
 			} else {
-				trimmed, _ := textReplay.ApplyToBuilder(&text, p.Text)
+				trimmed, _ := textReplay.ApplyToBuilder(&text, p.Text, p.Snapshot)
 				text.WriteString(trimmed)
 			}
 		}
 		for _, p := range result.ToolDetectionThinkingParts {
-			trimmed, _ := detectReplay.ApplyToBuilder(&toolDetectionThinking, p.Text)
+			trimmed, _ := detectReplay.ApplyToBuilder(&toolDetectionThinking, p.Text, p.Snapshot)
 			toolDetectionThinking.WriteString(trimmed)
 		}
 		return true

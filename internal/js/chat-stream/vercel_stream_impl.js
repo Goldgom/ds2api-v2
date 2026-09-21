@@ -363,7 +363,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
                 }
                 if (p.type === 'thinking') {
                   if (thinkingEnabled) {
-                    const replay = thinkingReplay.resolve(thinkingText, p.text);
+                    const replay = thinkingReplay.resolveChunk(thinkingText, p.text, Boolean(p.snapshot));
                     if (replay.dropped) {
                       thinkingText = replay.kept;
                       toolSieveState = createToolSieveState();
@@ -376,7 +376,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
                     deltaCoalescer.append('reasoning_content', replay.append);
                   }
                 } else {
-                  const replay = outputReplay.resolve(outputText, p.text);
+                  const replay = outputReplay.resolveChunk(outputText, p.text, Boolean(p.snapshot));
                   if (replay.dropped) {
                     outputText = replay.kept;
                     toolSieveState = createToolSieveState();
