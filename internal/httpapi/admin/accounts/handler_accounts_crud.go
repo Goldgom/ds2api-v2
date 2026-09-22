@@ -66,21 +66,24 @@ func (h *Handler) listAccounts(w http.ResponseWriter, r *http.Request) {
 	for _, acc := range accounts[start:end] {
 		testStatus, _ := h.Store.AccountTestStatus(acc.Identifier())
 		token := strings.TrimSpace(acc.Token)
+		deviceID := strings.TrimSpace(acc.DeviceID)
 		items = append(items, map[string]any{
-			"identifier":    acc.Identifier(),
-			"name":          acc.Name,
-			"remark":        acc.Remark,
-			"email":         acc.Email,
-			"mobile":        acc.Mobile,
-			"proxy_id":      acc.ProxyID,
-			"pool_type":     config.NormalizePoolType(acc.PoolType),
-			"has_password":  acc.Password != "",
-			"has_token":     token != "",
-			"token_preview": maskSecretPreview(token),
-			"test_status":   testStatus,
-			"enabled":       acc.IsEnabled(),
-			"muted":         acc.IsMuted(),
-			"muted_until":   acc.MutedUntil,
+			"identifier":        acc.Identifier(),
+			"name":              acc.Name,
+			"remark":            acc.Remark,
+			"email":             acc.Email,
+			"mobile":            acc.Mobile,
+			"proxy_id":          acc.ProxyID,
+			"pool_type":         config.NormalizePoolType(acc.PoolType),
+			"has_password":      acc.Password != "",
+			"has_token":         token != "",
+			"token_preview":     maskSecretPreview(token),
+			"has_device_id":     deviceID != "",
+			"device_id_preview": maskSecretPreview(deviceID),
+			"test_status":       testStatus,
+			"enabled":           acc.IsEnabled(),
+			"muted":             acc.IsMuted(),
+			"muted_until":       acc.MutedUntil,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize, "total_pages": totalPages})

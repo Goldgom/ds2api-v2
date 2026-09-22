@@ -156,6 +156,8 @@ Gemini 兼容客户端还可以使用 `x-goog-api-key`、`?key=` 或 `?api_key=`
 | POST | `/admin/accounts/test` | Admin | 测试单个账号 |
 | POST | `/admin/accounts/test-all` | Admin | 测试全部账号 |
 | POST | `/admin/accounts/sessions/delete-all` | Admin | 删除某账号的全部会话 |
+| POST | `/admin/accounts/{identifier}/device-id/reset` | Admin | 重置账号设备指纹并清空 token |
+| POST | `/admin/accounts/device-id/reset-all` | Admin | 批量重置设备指纹（可只重置指定账号） |
 | POST | `/admin/import` | Admin | 批量导入 keys/accounts |
 | POST | `/admin/test` | Admin | 测试当前 API 可用性 |
 | POST | `/admin/dev/raw-samples/capture` | Admin | 直接发起一次请求并保存为 raw sample |
@@ -890,6 +892,8 @@ data: {"type":"message_stop"}
       "has_password": true,
       "has_token": true,
       "token_preview": "abc...",
+      "has_device_id": true,
+      "device_id_preview": "B3****==",
       "test_status": "ok"
     }
   ],
@@ -1019,6 +1023,58 @@ data: {"type":"message_stop"}
 ```
 
 如果账号不存在或删除失败，`success` 会是 `false`，`message` 会返回错误原因。
+
+### `POST /admin/accounts/{identifier}/device-id/reset`
+
+为指定账号生成全新的设备指纹（device fingerprint），并清空该账号内存中的 token。
+
+设备指纹（`accounts[].device_id`）会随登录请求一起提交，并参与上游登录风控判定。
+当某个指纹被上游标记后，继续复用它会让该账号持续返回 `RISK_DEVICE_DETECTED`。
+重置指纹会同时清空 token，因此下一次请求必然走一次全新登录——这正是验证新指纹是否可用的方式。
+
+- `identifier` 支持 email / mobile / token-only 合成标识；
+- 账号不存在时返回 `404`；
+- 每个账号的指纹相互独立，重置某一个不会影响其它账号。
+
+**响应**：
+
+```json
+{
+  "success": true,
+  "identifier": "user@example.com",
+  "has_device_id": true,
+  "device_id_preview": "B3****=="
+}
+```
+
+`device_id_preview` 是掩码后的预览（与 `token_preview` 一致，只暴露首尾字符），
+可用于确认指纹是否已变化，或判断多个账号是否仍在共用同一指纹。
+完整指纹不会通过 Admin API 回传；需要比对时请读取 `config.json` 或 `/admin/config/export`。
+
+当服务以环境变量配置模式启动且未开启 `DS2API_ENV_WRITEBACK` 时，响应会附带
+`config_warning`，提示该改动仅在内存生效、重启后会丢失。
+
+### `POST /admin/accounts/device-id/reset-all`
+
+批量重置设备指纹。每个账号都会拿到独立的随机指纹，并同步清空 token。
+
+**请求**（可选）：
+
+```json
+{"identifiers": ["a@example.com", "13800000000"]}
+```
+
+不传 `identifiers` 或传空数组时重置全部账号。
+
+**响应**：
+
+```json
+{
+  "success": true,
+  "total": 3,
+  "reset": ["a@example.com", "b@example.com", "c@example.com"]
+}
+```
 
 ### `POST /admin/import`
 

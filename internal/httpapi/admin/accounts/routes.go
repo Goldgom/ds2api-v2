@@ -21,6 +21,8 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	r.Post("/accounts/test", h.testSingleAccount)
 	r.Post("/accounts/test-all", h.testAllAccounts)
 	r.Post("/accounts/sessions/delete-all", h.deleteAllSessions)
+	r.Post("/accounts/{identifier}/device-id/reset", h.resetAccountDeviceID)
+	r.Post("/accounts/device-id/reset-all", h.resetAllAccountsDeviceIDs)
 	r.Post("/test", h.testAPI)
 }
 
@@ -44,4 +46,10 @@ func (h *Handler) BatchToggleAccountEnabled(w http.ResponseWriter, r *http.Reque
 }
 func (h *Handler) DeleteAllSessions(w http.ResponseWriter, r *http.Request) {
 	h.deleteAllSessions(w, r)
+}
+func (h *Handler) ResetAccountDeviceID(w http.ResponseWriter, r *http.Request) {
+	h.resetAccountDeviceID(w, r)
+}
+func (h *Handler) ResetAllAccountsDeviceIDs(w http.ResponseWriter, r *http.Request) {
+	h.resetAllAccountsDeviceIDs(w, r)
 }

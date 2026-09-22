@@ -58,6 +58,8 @@ export default function AccountManagerContainer({ config, onRefresh, onMessage, 
         sessionCounts,
         deletingSessions,
         updatingProxy,
+        resettingDeviceID,
+        resettingAllDeviceIDs,
         togglingEnabled,
         togglingAllEnabled,
         addKey,
@@ -69,6 +71,8 @@ export default function AccountManagerContainer({ config, onRefresh, onMessage, 
         testAllAccounts,
         deleteAllSessions,
         updateAccountProxy,
+        resetAccountDeviceID,
+        resetAllAccountDeviceIDs,
         toggleAccountEnabled,
         toggleAllAccountsEnabled,
         showElasticPool,
@@ -135,6 +139,8 @@ export default function AccountManagerContainer({ config, onRefresh, onMessage, 
                 sessionCounts={sessionCounts}
                 deletingSessions={deletingSessions}
                 updatingProxy={updatingProxy}
+                resettingDeviceID={resettingDeviceID}
+                resettingAllDeviceIDs={resettingAllDeviceIDs}
                 togglingEnabled={togglingEnabled}
                 togglingAllEnabled={togglingAllEnabled}
                 totalAccounts={totalAccounts}
@@ -152,6 +158,8 @@ export default function AccountManagerContainer({ config, onRefresh, onMessage, 
                 onDeleteAccount={deleteAccount}
                 onDeleteAllSessions={deleteAllSessions}
                 onUpdateAccountProxy={updateAccountProxy}
+                onResetDeviceID={resetAccountDeviceID}
+                onResetAllDeviceIDs={resetAllAccountDeviceIDs}
                 onToggleAccountEnabled={toggleAccountEnabled}
                 onToggleAllAccountsEnabled={toggleAllAccountsEnabled}
                 onPrevPage={() => fetchAccounts(page - 1)}

@@ -17,6 +17,8 @@ export function useAccountActions({ apiFetch, t, onMessage, onRefresh, config, f
     const [sessionCounts, setSessionCounts] = useState({})
     const [deletingSessions, setDeletingSessions] = useState({})
     const [updatingProxy, setUpdatingProxy] = useState({})
+    const [resettingDeviceID, setResettingDeviceID] = useState({})
+    const [resettingAllDeviceIDs, setResettingAllDeviceIDs] = useState(false)
     const [togglingEnabled, setTogglingEnabled] = useState({})
     const [togglingAllEnabled, setTogglingAllEnabled] = useState(false)
     const [showElasticPool, setShowElasticPool] = useState(false)
@@ -352,6 +354,59 @@ export function useAccountActions({ apiFetch, t, onMessage, onRefresh, config, f
         }
     }
 
+    const resetAccountDeviceID = async (identifier) => {
+        const accountID = String(identifier || '').trim()
+        if (!accountID) {
+            onMessage('error', t('accountManager.invalidIdentifier'))
+            return
+        }
+        if (!confirm(t('accountManager.resetDeviceIDConfirm'))) return
+        setResettingDeviceID(prev => ({ ...prev, [accountID]: true }))
+        try {
+            const res = await apiFetch(`/admin/accounts/${encodeURIComponent(accountID)}/device-id/reset`, {
+                method: 'POST',
+            })
+            const data = await res.json()
+            if (!res.ok) {
+                onMessage('error', data.detail || t('messages.requestFailed'))
+                return
+            }
+            const warning = data.config_warning ? ` ${data.config_warning}` : ''
+            onMessage('success', t('accountManager.resetDeviceIDSuccess') + warning)
+            fetchAccounts()
+            onRefresh()
+        } catch (_err) {
+            onMessage('error', t('messages.networkError'))
+        } finally {
+            setResettingDeviceID(prev => ({ ...prev, [accountID]: false }))
+        }
+    }
+
+    const resetAllAccountDeviceIDs = async () => {
+        if (!confirm(t('accountManager.resetAllDeviceIDsConfirm'))) return
+        setResettingAllDeviceIDs(true)
+        try {
+            const res = await apiFetch('/admin/accounts/device-id/reset-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            })
+            const data = await res.json()
+            if (!res.ok) {
+                onMessage('error', data.detail || t('messages.requestFailed'))
+                return
+            }
+            const warning = data.config_warning ? ` ${data.config_warning}` : ''
+            onMessage('success', t('accountManager.resetAllDeviceIDsSuccess', { count: data.total || 0 }) + warning)
+            fetchAccounts()
+            onRefresh()
+        } catch (_err) {
+            onMessage('error', t('messages.networkError'))
+        } finally {
+            setResettingAllDeviceIDs(false)
+        }
+    }
+
     const toggleAccountEnabled = async (identifier, enabled) => {
         const accountID = String(identifier || '').trim()
         if (!accountID) {
@@ -516,6 +571,8 @@ export function useAccountActions({ apiFetch, t, onMessage, onRefresh, config, f
         sessionCounts,
         deletingSessions,
         updatingProxy,
+        resettingDeviceID,
+        resettingAllDeviceIDs,
         togglingEnabled,
         togglingAllEnabled,
         addKey,
@@ -527,6 +584,8 @@ export function useAccountActions({ apiFetch, t, onMessage, onRefresh, config, f
         testAllAccounts,
         deleteAllSessions,
         updateAccountProxy,
+        resetAccountDeviceID,
+        resetAllAccountDeviceIDs,
         toggleAccountEnabled,
         toggleAllAccountsEnabled,
         showElasticPool,

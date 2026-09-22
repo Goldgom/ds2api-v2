@@ -234,6 +234,10 @@ Troubleshooting:
 - **Startup log says `open /data/config.json: no such file or directory`**: make sure you deployed a version that includes the fresh-volume bootstrap fix, then redeploy the latest code.
 - **`open /app/config.json: permission denied`**: the config path still points at the read-only image directory; mount `/data` and set `DS2API_CONFIG_PATH=/data/config.json`.
 - **Config disappears after restart**: check that the `/data` persistent volume is mounted on this service. If you use `DS2API_CONFIG_JSON` but want Admin UI saves persisted, enable `DS2API_ENV_WRITEBACK=1`.
+- **Login returns `RISK_DEVICE_DETECTED` (every account on the same node fails at once)**: this is the upstream login risk-control verdict, not a DS2API error. Stop retrying (retries extend the risk window), then check in order:
+  1. **Confirm login really goes through the proxy**: the log must not contain `[proxy] build dialer failed`; if it does, that account fell back to a direct connection from the node IP.
+  2. **Reset the device fingerprint**: use "Reset device fingerprint" in the Admin account list, or call `POST /admin/accounts/device-id/reset` (use `POST /admin/accounts/device-id/reset-all` for every account). The reset also clears the token, so the next request logs in again with the new fingerprint.
+  3. **Do not share one fingerprint across accounts**: the device fingerprint participates in risk control and can be flagged; many accounts sharing a single fingerprint behind one IP is the most typical trigger. Prefer one fingerprint per account plus independent egress IPs.
 
 References: Zeabur's official [GitHub/Git integration](https://zeabur.com/docs/en-US/deploy/github), [Dockerfile deployment](https://zeabur.com/docs/en-US/deploy/dockerfile), and [Volumes](https://zeabur.com/docs/data-management/volumes) docs.
 

@@ -234,6 +234,10 @@ healthcheck:
 - **启动日志出现 `open /data/config.json: no such file or directory`**：请确认已经部署包含“首次空卷启动”修复的版本，并重新部署最新代码。
 - **出现 `open /app/config.json: permission denied`**：说明配置路径仍指向镜像内只读目录；设置持久卷 `/data`，并确认 `DS2API_CONFIG_PATH=/data/config.json`。
 - **管理台保存后重启配置丢失**：检查 `/data` 持久卷是否已挂载到当前服务；如果使用了 `DS2API_CONFIG_JSON`，但想让管理台保存落盘，请启用 `DS2API_ENV_WRITEBACK=1`。
+- **登录返回 `RISK_DEVICE_DETECTED`（同一节点上所有账号一起登录失败）**：这是上游登录风控的判定结果，不是 DS2API 自身的报错。先停止反复重试（重试会延长风控窗口），然后按顺序排查：
+  1. **确认登录确实走了代理**：日志中不应出现 `[proxy] build dialer failed`；出现即代表该账号已回退为直连节点 IP。
+  2. **重置设备指纹**：在管理台账号列表点「重置设备指纹」，或调用 `POST /admin/accounts/device-id/reset`（全部账号用 `POST /admin/accounts/device-id/reset-all`）。重置会同时清空 token，下一次请求会用新指纹重新登录。
+  3. **避免多账号共用一个指纹**：设备指纹会参与风控判定并被标记，同一下 IP 下大量账号共用同一指纹是最典型的触发原因。建议一个账号一个指纹，并配合独立出口 IP。
 
 参考：Zeabur 官方文档的 [GitHub/Git 集成](https://zeabur.com/docs/en-US/deploy/github)、[Dockerfile 部署](https://zeabur.com/docs/zh-CN/deploy/dockerfile) 与 [Volumes](https://zeabur.com/docs/data-management/volumes)。
 

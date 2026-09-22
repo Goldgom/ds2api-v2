@@ -2,9 +2,7 @@ package client
 
 import (
 	"context"
-	"crypto/rand"
 	dsprotocol "ds2api/internal/deepseek/protocol"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -107,12 +105,10 @@ func (c *Client) ensureAccountDeviceID(acc config.Account) (string, error) {
 	return deviceID, nil
 }
 
+// createRandomDeviceID 生成全新的设备指纹。实现集中在 config 包，供登录链路与
+// Admin 重置接口共用，避免两处格式漂移。
 func createRandomDeviceID() (string, error) {
-	buf := make([]byte, 64)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return "B" + base64.StdEncoding.EncodeToString(buf), nil
+	return config.NewDeviceID()
 }
 
 func (c *Client) reportClientSettingsAfterLogin(ctx context.Context, a *auth.RequestAuth, ssoID string) {

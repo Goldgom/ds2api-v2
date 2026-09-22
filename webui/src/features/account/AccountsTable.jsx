@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Check, Copy, Pencil, Play, Plus, Trash2, FolderX } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check, Copy, Fingerprint, Pencil, Play, Plus, Trash2, FolderX } from 'lucide-react'
 import clsx from 'clsx'
 
 export default function AccountsTable({
@@ -12,6 +12,8 @@ export default function AccountsTable({
     sessionCounts,
     deletingSessions,
     updatingProxy,
+    resettingDeviceID,
+    resettingAllDeviceIDs,
     togglingEnabled,
     togglingAllEnabled,
     totalAccounts,
@@ -29,6 +31,8 @@ export default function AccountsTable({
     onDeleteAccount,
     onDeleteAllSessions,
     onUpdateAccountProxy,
+    onResetDeviceID,
+    onResetAllDeviceIDs,
     onToggleAccountEnabled,
     onToggleAllAccountsEnabled,
     onPrevPage,
@@ -106,6 +110,17 @@ export default function AccountsTable({
                         className="flex items-center px-3 py-1.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-xs font-medium border border-border disabled:opacity-50"
                     >
                         {t('accountManager.enableAllAccounts')}
+                    </button>
+                    <button
+                        onClick={onResetAllDeviceIDs}
+                        disabled={resettingAllDeviceIDs || totalAccounts === 0}
+                        title={t('accountManager.deviceIDHint')}
+                        className="flex items-center px-3 py-1.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors text-xs font-medium border border-border disabled:opacity-50"
+                    >
+                        {resettingAllDeviceIDs
+                            ? <span className="animate-spin mr-2">⟳</span>
+                            : <Fingerprint className="w-3 h-3 mr-2" />}
+                        {t('accountManager.resetAllDeviceIDs')}
                     </button>
                 </div>
             </div>
@@ -219,6 +234,14 @@ export default function AccountsTable({
                                                     {t('accountManager.proxyBadge', { name: assignedProxy ? (assignedProxy.name || `${assignedProxy.host}:${assignedProxy.port}`) : acc.proxy_id })}
                                                 </span>
                                             )}
+                                            {acc.has_device_id && (
+                                                <span
+                                                    className="font-mono bg-muted px-1.5 py-0.5 rounded text-[10px]"
+                                                    title={t('accountManager.deviceIDHint')}
+                                                >
+                                                    {t('accountManager.deviceIDBadge', { value: acc.device_id_preview })}
+                                                </span>
+                                            )}
                                             {acc.pool_type === 'no_tools' && (
                                                 <span className="font-mono bg-blue-500/10 text-blue-500 px-1.5 py-0.5 rounded text-[10px]">
                                                     {t('accountManager.poolBadgeNoTools')}
@@ -270,6 +293,16 @@ export default function AccountsTable({
                                         title={id ? t('accountManager.editAccountTitle') : t('accountManager.invalidIdentifier')}
                                     >
                                         <Pencil className="w-3.5 h-3.5 lg:w-4 lg:h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => onResetDeviceID(id)}
+                                        disabled={!id || resettingDeviceID?.[id]}
+                                        className="p-1 lg:p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title={t('accountManager.resetDeviceID')}
+                                    >
+                                        {resettingDeviceID?.[id]
+                                            ? <span className="animate-spin block text-sm leading-none">⟳</span>
+                                            : <Fingerprint className="w-3.5 h-3.5 lg:w-4 lg:h-4" />}
                                     </button>
                                     <button
                                         onClick={() => onTestAccount(id)}
